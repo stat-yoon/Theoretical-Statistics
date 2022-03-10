@@ -23,9 +23,17 @@
 
 
 
-## Members
-* [@stat-yoon](https://github.com/stat-yoon)
-* [@IhyeonKIM](https://github.com/IhyeonKIM)
+## Members & Rshiny Address
+* 박지윤([@stat-yoon](https://github.com/stat-yoon))
+  * [Option Price](https://stat-jyp.shinyapps.io/option_price/)
+  * [Optimal Portfolio](https://stat-jyp.shinyapps.io/project_portfolio/)
+  * [Life Insuarance](https://stat-jyp.shinyapps.io/life_insuarance/)
+
+* 김이현([@IhyeonKIM](https://github.com/IhyeonKIM))
+  * [Default Forecast](https://2hyeon.shinyapps.io/bankruptcy)
+  * [Car Insurance](https://2hyeon.shinyapps.io/Car_Insurance)
+  * [Heart Disease](https://2hyeon.shinyapps.io/heart_disease)
+
 
 ## Reference
 
