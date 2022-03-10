@@ -23,8 +23,8 @@
 *** 
 
 ## Members
-* @stat-yoon
-@IhyeonKIM
+* [@stat-yoon](https://github.com/stat-yoon)
+* [@IhyeonKIM](https://github.com/IhyeonKIM)
 
 ## Reference
 
@@ -32,5 +32,6 @@
 * b)  All of Statistics (2004) Springer, Larry Wasserman.
 
 ***
+
 
 
