@@ -24,7 +24,7 @@
 
 ## Members
 * @stat-yoon
-* @IhyeonKIM
+* IhyeonKIM @mention
 
 ## Reference
 
