@@ -9,7 +9,7 @@
 
  회차 | 주제 | 내용 | App |
 | ------ | -- | -- |-----------|
-| Project #1 | Diffusion Model을 이용한 수요예측 | * DRAM * Covid19  |  |
+| Project #1 | Diffusion Model을 이용한 수요예측 | * DRAM <br>* Covid19  |  |
 | Project #2 | 한도(Limit)에 따른 손해보험료 산정 |  |  |
 | Project #3 | 생명표를 이용한 생명보험-연금 산정  |  |  |
 | Project #4 | Black-Scholes Option 가격 산정 |  | [Shiny4]( https://2hyeon.shinyapps.io/asian_option_price/) |
