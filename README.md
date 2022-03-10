@@ -18,7 +18,7 @@
 |  6 | GLM을 이용한 자동차보험료 산정 | 1977년 스웨덴 자동차 보험 자료 | GLM | [Shiny6](https://2hyeon.shinyapps.io/Car_Insurance/?_ga=2.231842646.890041282.1646883062-891940177.1646883062) |
 |  7 | 생명보험 해지방지(예측) CRM | 생명보험계약 해지여부자료 | · GLM<br>· GAM<br>· CoxPHM<br>· RandomForest<br>· SVM<br>· XGBoost |  |
 | 8 | GLM / Cox 회귀모형을 이용한 기업부도예측 | 기업 부도발생 여부 및 기업정보 | · GLM<br>· GAM<br>· CoxPHM<br>· KNN<br>· SVM<br>· XGBoost  |  |
-|  9 | Cox PHM, ALT 모형을 이용한 심장병 발생예측 | Framingham 심장병 데이터 | · CoxPHM<br>· ALT |  |
+|  9 | Cox PHM, ALT 모형을 이용한 심장병 발생예측 | Framingham 심장병 데이터 | · CoxPHM<br>· ALT | [Shiny9](https://soohyeonlee.shinyapps.io/Heart_Disease/) |
 
 
 
