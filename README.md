@@ -10,7 +10,7 @@
 
  회차 | 주제 | Data | Model | App |
 | ------ | -- | -- |-----|------|
-| Project #1 | Diffusion Model을 이용한 수요예측 | 256K,1M DRAM <br>COVID19사망자수, AIDS감염자수 <br>영화 관람객 - 기생충, 모가디슈 | BASS |  |
+| Project #1 | Diffusion Model을 이용한 수요예측 | 256K,1M DRAM <br>COVID19사망자수, AIDS감염자수 <br>영화 관람객 - 기생충, 모가디슈 | BASS<br>Logistic<br>Gumbel<br>Exponential |  |
 | Project #2 | 한도(Limit)에 따른 손해보험료 산정 |  | |  |
 | Project #3 | 생명표를 이용한 생명보험-연금 산정  |   |  |  |
 | Project #4 | Black-Scholes Option 가격 산정 |  |   | [Shiny4]( https://2hyeon.shinyapps.io/asian_option_price/) |
