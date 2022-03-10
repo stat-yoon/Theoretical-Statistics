@@ -6,7 +6,15 @@
 
 ## Contents
 
-
+1. Project #1 Diffusion Model을 이용한 수요예측
+2. Project #2 한도(Limit)에 따른 손해보험료 산정
+3. Project #3 생명표를 이용한 생명보험-연금 산정
+4. Project #4 Black-Scholes Option 가격 산정
+5. Project #5 Optimal Portfolio 계산 및 수익률 비교 
+6. Project #6 GLM을 이용한 자동차보험료 산정
+7. Project #7 생명보험 해지방지 CRM
+8. Project #8 GLM / Cox 회귀모형을 이용한 기업부도예측 
+9. Project #9 Cox PHM, ALT 모형을 이용한 심장병 발생예측
 
 
 *** 
