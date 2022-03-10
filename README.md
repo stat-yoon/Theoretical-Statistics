@@ -8,7 +8,7 @@
 ## Contents
 
 
- 회차 | 주제 | Data | Model | App |
+ No. | Subject | Data | Model | App |
 | ------ | -- | -- |-----|------|
 |  1 | Diffusion Model을 이용한 수요예측 |· 256K,1M DRAM<br>· COVID19사망자수, AIDS감염자수<br>· 영화 관람객:기생충, 모가디슈 | · BASS<br>· Logistic<br>· Gumbel<br>· Exponential | [Shiny1](https://ewhastat.shinyapps.io/demand_forecast/) |
 | 2 | 한도(Limit)에 따른 손해보험료 산정 |· 국내운전자보험<br>· 국내아파트화재보험<br>· 국내학교화재보험 |· Frechet<br>· Pareto<br>· Weibull<br>· Loglogistic |  [Shiny2](https://ewhastat.shinyapps.io/nonlife_insurance)|
