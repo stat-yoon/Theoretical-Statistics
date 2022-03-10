@@ -35,8 +35,9 @@
 
 *** 
 
-## Member
-
+## Members
+* @stat-yoon
+* @IhyeonKIM
 
 ## Reference
 
