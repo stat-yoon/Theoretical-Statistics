@@ -1,0 +1,294 @@
+---
+title: "SAMSUNG Option Price"
+author: "1조"
+output: 
+  html_document: 
+    df_print: kable
+    theme: paper
+    toc: yes
+    toc_float: yes
+---
+
+```{r include=FALSE, echo=FALSE}
+library(tidyverse)
+library(gridExtra)
+library(VGAM)
+library(ggpubr)
+library(lubridate)
+```
+
+```{r}
+samsung <- read.csv("samsung.csv", col.names = c("date","St","St.start"))
+samsung["date"] <- as.Date(samsung$date)
+head(samsung)
+
+maturity <- c(1/12, 3/12, 6/12, 9/12, 1)
+K <- samsung[samsung$date=="2019-12-30",]$St
+S0 <- samsung[samsung$date=="2020-01-02",]$St.start
+c(K,S0)
+```
+
+# Part1
+## (1)
+```{r}
+samsung2019 <- samsung %>% filter(date<="2019-12-31") %>% arrange(date) %>% mutate(t = order(date)-1, lnSt = log(St)) %>% dplyr::select(date,t, St, lnSt) # n=246
+
+g1 <- ggplot(samsung2019, aes(x=t, y=St)) + geom_line() + ggtitle("2019년 일별 종가")
+g2 <- ggplot(samsung2019, aes(x=t, y=lnSt)) + geom_line() + ggtitle("2019년 일별 로그종가")
+grid.arrange(g1, g2)
+```
+
+## (2)
+### (a)
+```{r warning=FALSE, message=FALSE, fig.height=10, fig.width=10}
+samsung2019 <- samsung2019 %>% mutate(dSt = c(diff(St),NA), ut = dSt/St, ut.star = c(diff(lnSt), NA)) %>% filter(t <= 245) # t=0,...,n-1(245)
+
+
+g1 <- ggplot(samsung2019, aes(x=t, y=ut))+geom_line()+ggtitle("2019 daily return - time series")
+g2 <- ggplot(samsung2019, aes(ut))+geom_histogram(bins=30)+ggtitle("2019 daily return - histogram")
+grid.arrange(g1, g2)
+
+qq.normal <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qnorm(p)) %>% ggplot(aes(q,ut)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle("normal Q-Q plot")
+
+qq.logis <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qlogis(p)) %>% ggplot(aes(q,ut)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle("logistic Q-Q plot")
+
+qq.laplace <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qlaplace(p)) %>% ggplot(aes(q,ut)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle("laplace Q-Q plot")
+
+qq <- list(qq.normal, qq.logis, qq.laplace)
+
+for(i in 1:10){
+  qq.plot <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qt(p, df=i)) %>% ggplot(aes(q,ut)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle(paste0("t-dist Q-Q plot (df = ",i,")"))
+  qq[[3+i]] <- qq.plot
+}
+
+grid.arrange(grobs=qq, nrow=3)
+```
+
+### (b)
+```{r}
+mu.ut <- mean(samsung2019$ut)
+var.ut <- var(samsung2019$ut)
+round(c(mu.ut, var.ut),4)
+
+mu.ut.star <- mean(samsung2019$ut.star)
+var.ut.star <- var(samsung2019$ut.star)
+round(c(mu.ut.star, var.ut.star),4)
+
+mu.ito <- mu.ut - var.ut/2
+var.ito <- var.ut
+round(c(mu.ito, var.ito),4)
+
+g1 <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qnorm(p)) %>% ggplot(aes(q,ut)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle("normal Q-Q plot of ut")
+g2 <- samsung2019 %>% mutate(p = rank(ut.star)/(nrow(samsung2019)+1), q=qnorm(p)) %>% ggplot(aes(q,ut.star)) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + ggtitle("normal Q-Q plot of ut_star")
+grid.arrange(g1,g2)
+```
+
+### (c)
+```{r}
+alpha <- c(0.05, 0.01)
+
+# normal dist
+norm.df <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qnorm(p))
+lm.norm <- lm(ut~q, data=norm.df)
+norm1 <- qnorm(alpha)*lm.norm$coef[[2]] + lm.norm$coef[[1]]
+norm2 <- qnorm(alpha)*sqrt(var.ut) + mu.ut
+
+# logisic dist
+logis.df <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qlogis(p))
+lm.logis <- lm(ut~q, data=logis.df)
+logis <- qlogis(alpha)*lm.logis$coef[[2]] + lm.logis$coef[[1]]
+
+# t-dist(df=10)
+t.df <- samsung2019 %>% mutate(p = rank(ut)/(nrow(samsung2019)+1), q=qt(p, df=10))
+lm.t <- lm(ut~q, data=t.df)
+t10 <- qt(alpha, df=10)*lm.t$coef[[2]] + lm.t$coef[[1]]
+
+(ut.VaR <- round(cbind(alpha, norm1, norm2, logis, t10),3))
+```
+
+### (d)
+```{r, warning=FALSE, message=FALSE, fig.height=10}
+data.n <- samsung %>% filter(date<="2019-12-31") %>% arrange(date) %>% mutate(t = order(date)-1, lnSt = log(St)) %>% dplyr::select(t, St, lnSt)
+
+vt <- data.n %>% filter(t%%5==0) %>% transform(vt = c(diff(St), NA)/St) %>% dplyr::select(vt) %>% na.omit() 
+wt <- data.n %>% filter(t%%21==0) %>% transform(wt = c(diff(St), NA)/St) %>% dplyr::select(wt) %>% na.omit() 
+
+
+qq.plot <- function(data, x, start=1, end=10){
+  qq.normal <- data %>% mutate(p = rank(get(x))/(nrow(data)+1), q=qnorm(p)) %>% ggplot(aes(q,get(x))) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + labs(y=x, title = "normal Q-Q plot")
+
+  qq.logis <- data %>% mutate(p = rank(get(x))/(nrow(data)+1), q=qlogis(p)) %>% ggplot(aes(q,get(x))) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + labs(y=x, title = "logistic Q-Q plot")
+
+  qq.laplace <- data %>% mutate(p = rank(get(x))/(nrow(data)+1), q=qlaplace(p)) %>% ggplot(aes(q,get(x))) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + labs(y=x, title = "laplace Q-Q plot")
+   
+  plot <- list(qq.normal, qq.logis, qq.laplace)
+  
+  # t.df = round(fitdistr(c(data[x])[[1]], "t")$estimate["df"])
+  
+  for(i in start:end){
+    t.df = i
+    qq.t <- data %>% mutate(p = rank(get(x))/(nrow(data)+1), q=qt(p, df=t.df)) %>% ggplot(aes(q,get(x))) + geom_point() + geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + labs(y=x, title = paste0("t Q-Q plot, df = ",t.df))
+    plot[[3+which(seq(start, end)==i)]] <- qq.t
+  }
+  
+  return(plot)
+}
+
+grid.arrange(grobs=qq.plot(vt, "vt", 1, 6)) # laplace, t(4)
+grid.arrange(grobs=qq.plot(wt, "wt", 1, 6)) # laplace, t(3)
+
+
+VaR <- function(x, f, alpha=c(0.05, 0.01), par=NA, ...){
+  if(sum(is.na(par))>0){
+    data <- data.frame(x=x) %>% mutate(p=rank(x)/(length(x)+1), q=f(p,...))
+    lm.fit <- lm(x ~ q, data=data)
+    res <- f(alpha, ...)*lm.fit$coef[[2]] + lm.fit$coef[[1]]
+  }
+  else{
+    res <- f(alpha, ...)*par[2] + par[1]
+  }
+  return(res)
+}
+
+
+vt.VaR <- round(cbind(alpha=c(0.05, 0.01), norm1 = VaR(vt$vt, qnorm), norm2 = VaR(vt$vt, qnorm, par=c(mean(vt$vt), sd(vt$vt)))),3)
+wt.VaR <- round(cbind(alpha=c(0.05, 0.01), norm1 = VaR(wt$wt, qnorm), norm2 = VaR(wt$wt, qnorm, par=c(mean(wt$wt), sd(wt$wt)))),3)
+
+ut.VaR
+vt.VaR
+wt.VaR
+```
+
+### (e)
+```{r}
+diff.same <- function(x, lag){
+  x <- x[seq(1,length(x),lag)]
+  res <- diff(x)
+  return(res)
+}
+
+d1 <- var(diff.same(data.n$lnSt, 1))
+d5 <- var(diff.same(data.n$lnSt, 5))
+d10 <- var(diff.same(data.n$lnSt, 10))
+d15 <- var(diff.same(data.n$lnSt, 15))
+d20 <- var(diff.same(data.n$lnSt, 20))
+d25 <- var(diff.same(data.n$lnSt, 25))
+
+
+rw.res <- data.frame(d = c(1,5*c(1:5)), var = c(d1, d5, d10, d15, d20, d25))
+
+g1 <- ggplot(rw.res, aes(d, var)) + geom_point() + geom_abline(slope = rw.res[1,2], intercept = 0, col="blue", lty=2)
+g2 <- ggplot(rw.res, aes(sqrt(d), sqrt(var))) + geom_point() + geom_abline(slope = sqrt(rw.res[1,2]), intercept = 0, col="blue", lty=2)
+g3 <- ggplot(rw.res, aes(log(d), log(var))) + geom_point() + geom_abline(slope = 1, intercept = log(rw.res[1,2]), col="blue", lty=2)
+grid.arrange(g1, g2, g3, nrow=1)
+```
+
+
+## (3)
+```{r}
+ut <- samsung2019$ut
+acf(ut)
+```
+
+
+## (4)
+```{r}
+r <- log(1.05)
+u.bar <- mean(samsung2019$ut.star)
+s <- sd(samsung2019$ut.star)
+sigma.hat <- s/sqrt(1/246)
+mu.hat <- (u.bar + s^2/2)/(1/246)
+c(r, mu.hat, sigma.hat)
+```
+
+
+## (5)
+```{r}
+n2020 <- 248 # 2020년 개시일
+t <- c(1:n2020)/n2020
+st.hat <- S0*exp((mu.hat-sigma.hat^2/2)*t)
+st.hat.upper <- S0*exp((mu.hat-sigma.hat^2/2)*t+1.96*sigma.hat*sqrt(t))
+st.hat.lower <- S0*exp((mu.hat-sigma.hat^2/2)*t-1.96*sigma.hat*sqrt(t))
+
+st2020 <- cbind(st.hat, st.hat.upper, st.hat.lower)
+
+samsung2020 <- samsung %>% filter(date >= "2020-01-01") %>% arrange(date)
+samsung2020 <- cbind(samsung2020[c("date","St")], st2020)
+
+ggplot(samsung2020) + geom_line(aes(date, St)) + geom_line(aes(date, st.hat), col="red") + geom_line(aes(date, st.hat.lower), col="blue", lty=2) + geom_line(aes(date, st.hat.upper), col="blue", lty=2)
+```
+
+# part2
+## (1)
+### Monte-Carlo
+```{r}
+maturity;S0;K
+r;mu.hat;sigma.hat
+
+option <- data.frame(t=maturity, mc.call = NA, mc.put = NA, bs.call = NA, bs.put = NA)
+
+monte.carlo <- function(s, K, M, t, r, mu, sigma){
+  z <- rnorm(M)
+  st <- s*exp((r-sigma^2/2)*t + sigma*sqrt(t)*z)
+  st.call <- sapply(st-K, max, 0)
+  st.put <- sapply(K-st, max, 0)
+  ct <- exp(-r*t)*sum(st.call)/M
+  pt <- exp(-r*t)*sum(st.put)/M
+  return(list(call=ct, put=pt))
+}
+
+set.seed(123)
+for(i in 1:5){
+  mc <- monte.carlo(S0, K, M=1000000, option$t[i], r, mu.hat, sigma.hat)
+  option[i,"mc.call"] <- mc$call
+  option[i,"mc.put"] <- mc$put
+}
+
+option
+
+
+```
+
+### Black-Scholes
+```{r}
+black.scholes <- function(s, K, t, r, sigma){
+  d1 <- (log(s/K) + (r+sigma^2/2)*t)/(sigma*sqrt(t))
+  d2 <- d1 - sigma*sqrt(t)
+  ct <- exp(-r*t)*(s*exp(r*t)*pnorm(d1)-K*pnorm(d2))
+  pt <- exp(-r*t)*(-s*exp(r*t)*pnorm(-d1)+K*pnorm(-d2))
+  return(list(call=ct, put=pt))
+}
+
+for(i in 1:5){
+  mc <- black.scholes(S0, K, option$t[i], r, sigma.hat)
+  option[i,"bs.call"] <- mc$call
+  option[i,"bs.put"] <- mc$put
+}
+
+option
+# write.csv(round(option), "option.csv")
+```
+
+## (2)
+```{r}
+port <- function(t, ct, pt, st, n.call, n.put, K, s0){
+  df <- data.frame(t=t, St = st, call = n.call*ct, put = n.put*pt)
+  df["r.call"] <- n.call*sapply(st-K, max, 0)
+  df["r.put"] <- n.put*sapply(K-st, max, 0)
+  df <- df %>% mutate(net.profit = (r.call+r.put) - (call+put), r.option = net.profit/(call+put)*100, r.stock=100*(st-s0)/s0)
+  return(df)
+}
+
+mat.date <- samsung2020 %>% mutate(m = month(date)) %>% group_by(m) %>% summarise(date = max(date)) %>% filter(m %in% c(1,3,6,9,12)) 
+st.real <- samsung2020 %>% filter(date %in% mat.date$date) %>% dplyr::select(date, St)
+
+port.a <- port(maturity, option$bs.call, option$bs.put, st.real$St, 150, 50, K, S0)
+port.a
+port.b <- port(maturity, option$bs.call, option$bs.put, st.real$St, 100, 100, K, S0)
+port.b
+port.c <- port(maturity, option$bs.call, option$bs.put, st.real$St, 50, 150, K, S0)
+port.c
+# write.csv(rbind(port.a, port.b, port.c), "port.csv")
+
+```
+

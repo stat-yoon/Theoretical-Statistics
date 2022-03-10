@@ -1,0 +1,632 @@
+---
+
+title: "hw8"
+output: 
+  html_document: 
+    df_print: kable
+    theme: paper
+    toc: yes
+    toc_float: yes
+---
+
+```{r warning=FALSE, message=FALSE}
+library(readxl); library(tidyverse); library(GGally); library(ggplot2); library(gridExtra); library(lubridate); library(bestglm); library(ROCR); library(gam); library(MASS); library(caret); library(e1071); library(kknn); library(class);library(survival); library(survminer); library(mltools); library(data.table); library(reshape);
+library(kableExtra); library(devtools); library(nnet); library(NeuralNetTools); library(xgboost); library(randomForest)
+library(gghalfnorm); library(gridExtra); library(ggcorrplot)
+```
+
+```{r}
+df <- read_excel('HW#8.xls', sheet=1)
+names(df)[-c(1,46,47)] <- paste0('x', 1:(ncol(df)-3))
+names(df)[c(46, 47)] <- c('delta', 'y')
+head(df)
+```
+
+```{r}
+# train test split
+train <- df[1:3168,]
+test <- df[3169:nrow(df),-c(46,47)]
+```
+
+# 결측치(9999.99) NA로 대체
+```{r}
+## train
+for (i in 2:43){
+  train[[i]] <- replace(train[[i]], train[[i]]==9999.99, NA)
+  train[[i]] <- replace(train[[i]], train[[i]]==-9999.99, NA)
+}
+```
+
+# outlier halfnorm
+```{r fig.height=100, fig.width=50}
+halfnorm.plot <- list()
+for (i in 2:20){
+  halfnorm.plot[[i-1]] <- gghalfnorm(train[[i]])
+}
+grid.arrange(grobs=halfnorm.plot, ncol=3)
+```
+```{r fig.height=100, fig.width=50}
+halfnorm.plot <- list()
+for (i in 21:43){
+  halfnorm.plot[[i-20]] <- gghalfnorm(train[[i]])
+}
+grid.arrange(grobs=halfnorm.plot, ncol=3)
+```
+
+```{r}
+outlier <- read_excel('halfnorm_result.xlsx', sheet=2, col_names = F)
+outlier <- c(outlier)$...1
+outlier
+train <- train %>% filter(!(ID %in% outlier))
+
+# outlier drop
+ind <- c( which(train$x2>20000), which(train$x4>100000),
+          which(train$x7>50000), which(train$x8>500000), which(train$x12>200000), which(train$x13>50000), which(train$x15>30000), which(train$x16>30000), which(train$x17>300000), which(train$x20>50000),
+          which(train$x22>500000000), which(train$x23>2000000000), which(train$x27>50000), which(train$x37>4000))
+
+train <- train[-ind,]
+```
+
+```{r}
+# drop variables with na more than 500
+## 34,35,38
+na <- apply(train, 2, function(x) sum(is.na(x)))
+train <- train %>% dplyr::select(-names(na[na>500]))
+```
+
+```{r fig.height=10, fig.width=10}
+corr <-cor(train[2:40], use = 'complete.obs')
+ggcorrplot(corr)
+# round(corr,3)
+```
+
+```{r}
+train_now <- train
+train_median <- apply(train[,2:40], 2, median, na.rm=TRUE)
+# na값 median 대체
+for (i in 2:40){
+  train[[i]][is.na(train[[i]])] <- median(train[[i]],na.rm=TRUE)
+}
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+for (i in 2:40){
+  hist(train[[i]], main=colnames(train)[i], breaks=50)
+}
+```
+
+# train 변수 변환
+```{r}
+
+par(mfrow=c(2,2))
+for (i in c(1:4, 7, 8, 12, 13, 15, 20, 32, 33, 36, 37, 39)){
+  name <- paste0("x",i)
+  hist(log(train[[name]]+1), breaks=30, main=paste0("histogram of log(",name,")"), xlab = "")
+  train[name] <- log(train[[name]]+1)
+}
+
+par(mfrow=c(2,2))
+for(i in c(11, 19)){
+  name <- paste0("x",i)
+  hist(log(train[[name]]), breaks=30, main=paste0("histogram of log(",name,")"), xlab = "")
+  hist(sqrt(train[[name]]), breaks=30, main=paste0("histogram of sqrt(",name,")"), xlab = "")
+  train[name] <- sqrt(train[[name]])
+}
+
+par(mfrow=c(1,2))
+hist(train$x40, breaks = 30)
+hist(1/train$x40, breaks = 30)
+train$x40 <- 1/(train$x40)
+```
+
+```{r}
+# factor 변환
+train[,c('x43','x44','y')] <- lapply(train[,c('x43','x44','y')], factor)
+```
+
+```{r}
+# 다중공선성 있는 변수 제거
+# x2, 3, 4, 5, 10, 28, 30, 32 삭제
+drop_var <- which(colnames(train) %in% c('x2', 'x3', 'x4', 'x5', 'x10', 'x28', 'x30', 'x32'))
+train <- train[,-drop_var]
+```
+
+
+### test 변수 전처리
+```{r}
+# 9999.99 -> NA
+for (i in 2:43){
+  test[[i]] <- replace(test[[i]], test[[i]]==9999.99, NA)
+  test[[i]] <- replace(test[[i]], test[[i]]==-9999.99, NA)
+}
+# 변수 drop
+# 34,35,38 x2, 3, 4, 5, 10, 28, 30, 32 삭제
+drop_var <- which(colnames(test) %in% c('x2', 'x3', 'x4', 'x5', 'x10', 'x28', 'x30', 'x32', 'x34', 'x35', 'x38'))
+test <- test[,-drop_var]
+
+# missing value imputation with median(train data)
+for (i in 2:32){
+  test[[i]][is.na(test[[i]])] <- train_median[colnames(test[,i])]
+}
+
+# log 변환
+for (i in c(1, 7, 8, 12, 13, 15, 20, 33, 36, 37, 39)){
+  name <- paste0("x",i)
+  test[name] <- log(test[[name]]+1)
+}
+# sqrt 변환
+for(i in c(11, 19)){
+  name <- paste0("x",i)
+  test[name] <- sqrt(test[[name]])
+}
+# inverse 변환
+test$x40 <- 1/(test$x40)
+
+# factor 변환
+test[,c('x43','x44')] <- lapply(test[,c('x43','x44')], factor)
+```
+
+
+
+# PART I
+
+## a) Logistic Reg
+
+```{r warning = FALSE, message = FALSE}
+train_data <- train[2:35]
+# glm
+glm_probit <- glm(delta ~ ., family = binomial(link = "probit"), data = train_data)
+# glm_probit2 <- glm(delta ~ .*., family = binomial(link = "probit"), data = train_data)
+# prob_both <- step(glm_probit, scope=formula(glm_probit2), trace=F)
+
+glm_logit <- glm(delta ~ ., family = binomial(link = "logit"), data = train_data)
+# glm_logit2 <- glm(delta ~ .*., family = binomial(link = "logit"), data = train_data)
+# log_both <- step(glm_logit, scope=formula(glm_logit2), trace=F)
+
+cloglog = function(x) log(-log(1-x))
+glm_gompit <- glm(delta ~ ., family = binomial(link = cloglog), data = train_data)
+# glm_gompit2 <- glm(delta ~ .*., family = binomial(link = cloglog), data = train_data)
+# gomp_both <- step(glm_gompit, scope=formula(glm_gompit2), trace=F)
+
+prob_simp_step <- step(glm_probit, trace=F)
+log_simp_step <- step(glm_logit, trace=F)
+gomp_simp_step <- step(glm_gompit, trace=F)
+
+prob_aic <- rbind(simple=extractAIC(glm_probit), 
+                  simple_stepwise=extractAIC(prob_simp_step)
+                  # interaction=extractAIC(glm_probit2), 
+                  # stepwise=extractAIC(prob_both) 
+                  )
+
+logit_aic <- rbind(simple=extractAIC(glm_logit),
+                   simple_stepwise=extractAIC(log_simp_step)
+                   # interaction=extractAIC(glm_logit2),
+                   # stepwise=extractAIC(log_both)
+                   )
+
+gomp_aic <- rbind(simple=extractAIC(glm_gompit),
+                  simple_stepwise=extractAIC(gomp_simp_step)
+                  # interaction=extractAIC(glm_gompit2), 
+                  # stepwise=extractAIC(gomp_both)
+                  )
+
+prob_aic
+logit_aic
+gomp_aic
+
+summary(log_simp_step)
+
+```
+
+    
+## b) GAM
+
+```{r warning = FALSE, message = FALSE}
+
+gam <- gam(delta ~ . , data=train_data, family=binomial)
+extractAIC(gam)
+
+# 업종 : 경공업, 중공업,건설업,도소매,서비스 
+# 규모 : 외감, 비외감1,비외감2, 소호, 개인 
+# 외부인에 의하여 감사를 받는 기업을 외감기업 
+# 외부인에 의하여 감사를 받지 않아도 되는 기업을 비외감기업
+
+gam_scope = list("x1" = ~1 + x1 + s(x1, 4) + s(x1, 8),
+                 "x6" = ~1 + x6 + s(x6, 4) + s(x6, 8),
+                 "x7" = ~1 + x7 + s(x7, 4) + s(x7, 8),
+                 "x8" = ~1 + x8 + s(x8, 4) + s(x8, 8),
+                 "x9" = ~1 + x9 + s(x9, 4) + s(x9, 8),
+                 "x11" = ~1 + x11 + s(x11, 4) + s(x11, 8),
+                 "x12" = ~1 + x12 + s(x12, 4) + s(x12, 8),
+                 "x13" = ~1 + x13 + s(x13, 4) + s(x13, 8),
+                 "x14" = ~1 + x14 + s(x14, 4) + s(x14, 8),
+                 "x15" = ~1 + x15 + s(x15, 4) + s(x15, 8),
+                 "x16" = ~1 + x16 + s(x16, 4) + s(x16, 8),
+                 "x17" = ~1 + x17 + s(x17, 4) + s(x17, 8),
+                 "x18" = ~1 + x18 + s(x18, 4) + s(x18, 8),
+                 "x19" = ~1 + x19 + s(x19, 4) + s(x19, 8),
+                 "x20" = ~1 +  x20 + s(x20, 4) + s(x20, 8),
+                 "x21" = ~1 + x21 + s(x21, 4) + s(x21, 8),
+                 "x22" = ~1 + x22 + s(x22, 4) + s(x22, 8),
+                 "x23" = ~1 + x23 + s(x23, 4) + s(x23, 8),
+                 "x24" = ~1 + x24 + s(x24, 4) + s(x24, 8),
+                 "x25" = ~1 + x25 + s(x25, 4) + s(x25, 8),
+                 "x26" = ~1 + x26 + s(x26, 4) + s(x26, 8),
+                 "x27" = ~1 + x27 + s(x27, 4) + s(x27, 8),
+                 "x29" = ~1 +  x29 + s(x29, 4) + s(x29, 8),
+                 "x31" = ~1 + x31 + s(x31, 4) + s(x31, 8),
+                 "x33" = ~1 + x33 + s(x33, 4) + s(x33, 8),
+                 "x36" = ~1 + x36 + s(x36, 4) + s(x36, 8),
+                 "x37" = ~1 + x37 + s(x37, 4) + s(x37, 8),
+                 "x39" = ~1 +  x39 + s(x39, 4) + s(x39, 8),
+                 "x40" = ~1 + x40 + s(x40, 4) + s(x40, 8),
+                 "x41" = ~1 + x41 + s(x41, 4) + s(x41, 8),
+                 "x42" = ~1 + x42 + s(x42, 4) + s(x42, 8),
+                 "x43" = ~1 + x43,
+                 "x44" = ~1 + x44)
+                 
+gam_step <- step.Gam(gam, scope = gam_scope, trace=F)
+
+#GAM AIC
+gam_step$aic
+plot(gam_step)
+```
+
+
+
+# part2
+## a) CoxPHM
+
+```{r warning = FALSE, message = FALSE}
+train$delta <- as.numeric(as.character(train$delta))
+train$y <- as.numeric(as.character(train$y))
+
+#calender.times<-calender.times/30
+
+sur.cox <- coxph(Surv(y, delta)~., data = train[,-1])
+ggsurvplot(survfit(sur.cox), data=train[,-1], conf.int = FALSE)
+extractAIC(sur.cox)
+
+cox.model<-stepAIC(sur.cox,direction = "both", trace = 0)
+summary(cox.model)
+
+extractAIC(cox.model)
+
+# ggforest(cox.model, data = train)
+ggsurvplot(survfit(cox.model), data=train[,-1], conf.int = FALSE)
+
+```
+
+
+
+
+```{r}
+## centering 
+train.mean <- apply(train[,2:32], 2, mean)
+train.c <-cbind(data.frame(scale(train[,2:32],scale=F)),train[,-(2:32)])
+
+# 선택된 변수들로 fitting  
+cox.model2 <- coxph(Surv(y, delta) ~  x1 + x7 + x12 + x18 + x20 + 
+    x22 + x23 + x24 + x25 + x26 + x29 + x33 + x40 + x41 + x42 + 
+    x44, data = train.c)
+
+S <- basehaz(cox.model2)
+lm <- lm(log(hazard)~time, data = S)
+alpha <- summary(lm)$coefficients[1]
+beta <- summary(lm)$coefficients[2]
+
+delta.t <- 365
+Ht <- exp(alpha+beta*0)
+Ht.delta <- exp(alpha+beta*(0+delta.t))
+St<- exp(-Ht)
+St.delta<-exp(-Ht.delta)
+
+mu.cox <- predict(cox.model2, train.c, type = 'risk')
+p.cox <- 1-(St.delta/St)^mu.cox
+
+#p.cox2 <-1-predict(cox.model2, train.c, type = 'survival')
+
+hist(p.cox)
+hist(log(p.cox))
+sum(is.na(p.cox))
+table(p.cox>0.5)
+confusionMatrix( factor(as.numeric(p.cox>0.5)), factor(train$delta))
+
+```
+
+# part3
+
+## a)  
+위 (Part1,2) 에서 구한 최적 예측모형을 이용하여 학습자료 (training data ; 1-3128)에서 해당 예측변수들을 이용하여 각 기업별로 Logistic GLM 부도확률, Logistic GAM 부도확률, Cox-PH 부도 확률을 구하시오. 
+또 이들 값의 크기순으로 10개 등급을 매긴 후 각 방법의 구간별 실제부도율을 비교하는 표 및 Lift Chart를 겹처서 그려보고 세 방법의 장단점을 비교 검토하시오
+
+```{r warning = FALSE, message = FALSE}
+# 1) GLM 
+
+glm_pred <- predict(log_simp_step, newdata = train , type = 'response')
+glm_df <- data.frame(ID=train$ID, y=train$delta, pred=glm_pred)
+confusionMatrix( factor(as.numeric(glm_pred>0.5)), factor(train$delta))
+
+# 2) GAM 
+
+gam_pred <- predict(gam_step, newdata = train, type = 'response')
+gam_df <- data.frame(ID=train$ID, y=train$delta, pred=gam_pred)
+confusionMatrix( factor(as.numeric(gam_pred>0.5)), factor(train$delta))
+
+
+# 3) Cox
+
+cox_df <-data.frame(pred =p.cox, y = train$delta) 
+
+# lift function 
+make.lift <- function(x){
+  
+  x <- x %>% arrange(desc(pred))
+  rownames(x) <- 1:nrow(x)
+  mat <- matrix(0, ncol=3, nrow=10)
+  mat[,1] <- sum(x$y==1)/nrow(x)
+
+  for (i in 1:10){
+    df <- x[((i-1)*317+1):(i*317),]
+    df <- na.omit(df)
+    mat[i,2] <- sum(df$y==1)/nrow(df)
+    mat[i,3] <- mat[i,2]/mat[i,1]
+  }
+
+  colnames(mat) <- c('tot_lift', 'row_lift', 'lift')
+  return(mat)
+  
+}
+
+glm.lift <- make.lift(glm_df)
+gam.lift <- make.lift(gam_df)
+cox.lift <- make.lift(cox_df)
+
+## lift plot 
+color_list <- c("cornflowerblue", "orange", "red2", "forestgreen", "black")
+plot(glm.lift[,3], type = 'l', lwd = 2, col=color_list[1], main="lift curve", ylab ="", ylim = c(0,6))
+lines(gam.lift[,3], type = 'l', lwd = 2, col=color_list[3])
+lines(cox.lift[,3], type = 'l', lwd = 2, col=color_list[2])
+legend('topright', legend = c("GLM", "GAM", "COX"), col = color_list[c(1,3,2)], 
+       lwd = c(2,2,2), lty=c(1,1,1), inset=c(0.02,0.04))
+
+```
+
+## b) 
+
+상위 10% (317개) 에 해당하는 기업들의 지시변수 (indicator variables )를 각각 구하시오. 또 각 경우 학습자료를 이용하여 이들 317개 지시변수 중 실제부도기업의 백분율값 (100%*(실제부도기업수/317) ) 을 구하고 각 방법의 장단점을 서로 비교 검토 하시오
+
+```{r warning = FALSE, message = FALSE}
+
+data.frame(glm = glm.lift[1,2]*100, gam = gam.lift[1,2]*100, cox = cox.lift[1,2]*100) %>% round(3)
+
+```
+
+## c) 
+Part 1-2에서 최종 선택된 GLM/ GAM / Cox PHM 모형의 AIC 값들을 제출하시오.
+```{r warning = FALSE, message = FALSE}
+
+data.frame(glm.aic = round(AIC(log_simp_step)) , gam.aic = round(AIC(gam_step)), 
+           cox.aic = round(AIC(cox.model))) 
+
+```
+
+## d) 
+
+검정용 자료 (test data ; 3129-6336)에 대하여 GLM/GAM 부도확률 및 Cox PHM 부도점수의 추정값과 이들 값이 상위 10%에 해당하는 기업들의 지시변수(indicator variables)를 각각 구하여 excel file로 제출하시오.
+
+(예측된 부도 확률/점수 값이 상위 10% 에 속하는 317개 기업 중 실제 부도기업의 백분율 (Lift)을 검정자료에서 구하여 각조의 예측 능력을 객관적으로 비교 평가함)
+
+```{r warning = FALSE, message = FALSE}
+submission <- test["ID"]
+
+### 1) GLM 해지 확률
+glm_yhat <- predict(log_simp_step, newdata = test, type = 'response')
+submission["glm"] <- ifelse(glm_yhat>=sort(glm_yhat, decreasing = T)[317], 1, 0)
+
+### 2) GAM 해지 확률
+gam_yhat <- predict(gam_step, newdata = test, type = 'response')
+submission["gam"] <- ifelse(gam_yhat>=sort(gam_yhat, decreasing = T)[317], 1, 0)
+
+### 3) COX 해지 확률
+train_mean <- apply(train[,2:32], 2, mean)
+test.c <- test
+for(i in names(train_mean)){
+  test.c[i] <- test.c[i]-train_mean[i]
+}
+test.score <- predict(cox.model2, test.c, type = 'risk')
+submission["cox"] <- ifelse(test.score>=sort(test.score, decreasing = T)[317], 1, 0)
+head(submission)
+```
+
+
+# part4
+
+## a)
+위에서 사용한 방법 외에 아래의 다양한 Data Mining 기법을 이용한 분석을 추가하여 각 방법들 의 장단점을 서로 비교 검토해 보시오. 
+
+### LDA 
+```{r warning = FALSE, message = FALSE}
+ld <- lda(delta~., data=train_data, cv=TRUE)
+ld_hat <- predict(ld, train_data)
+ldahist(ld_hat$x, g=train_data$delta)
+# train predict
+lda_df <- data.frame(ID=train$ID, y=train$delta, pred=ld_hat$posterior[,2])
+
+# test
+ld_test <- predict(ld, test)$posterior[,2]
+submission["lda"] <- ifelse(ld_test>=sort(ld_test, decreasing = T)[317], 1, 0)
+```
+
+### KNN
+```{r warning = FALSE, message = FALSE}
+# train data -> min-max scaling
+train_min <- apply(train_data[,1:31], 2, min)
+train_max <- apply(train_data[,1:31], 2, max)
+train_mm <- train_data
+for(i in 1:31){
+  train_mm[,i] <- (train_mm[,i]-train_min[i])/(train_max[i]-train_min[i])
+}
+# encoding
+train_mm$delta <- ifelse(train_mm$delta==1, "yes", "no")
+x43_level <- as.character(1:5); names(x43_level) <- levels(train_mm$x43)
+train_mm["x43"] <- as.factor(sapply(train_mm$x43, function(x) x43_level[[x]]))
+x44_level <- as.character(1:5); names(x44_level) <- levels(train_mm$x44)
+train_mm["x44"] <- as.factor(sapply(train_mm$x44, function(x) x44_level[[x]]))
+
+control <- trainControl(method="cv",
+                        number=10,
+                        classProbs = TRUE)
+kn <- train(delta~., data=train_mm, method="knn", trControl=control)
+best_k <- kn$bestTune
+# train predict
+set.seed(2021)
+kn_fit <- knn(train=train_mm[,-34], cl=train_mm$delta, test=train_mm[,-34] , k=best_k, prob=TRUE)
+knn_df <- data.frame(ID=train$ID, y=train$delta, pred=1-attr(kn_fit,"prob"))
+
+
+# test
+# min-max scaling
+test_mm <- test[,-1]
+for(i in 1:31){
+  test_mm[,i] <- (test_mm[,i]-train_min[i])/(train_max[i]-train_min[i])
+}
+# encoding
+test_mm["x43"] <- sapply(test_mm$x43, function(x) x43_level[[x]])
+test_mm["x44"] <- sapply(test_mm$x44, function(x) x44_level[[x]])
+set.seed(2021)
+kn_fit <- knn(train=train_mm[,-34], cl=train_mm$delta, test=test_mm , k=best_k, prob=TRUE)
+knn_test <- 1-attr(kn_fit,"prob")
+submission["knn"] <- ifelse(knn_test>=sort(knn_test, decreasing = T)[317], 1, 0)
+
+```
+
+### SVM 
+```{r warning = FALSE, message = FALSE}
+svm.t <- tune.svm(delta~., data=train_data, gamma=c(0.005,0.001), cost=c(3,5))
+svm_fit <- svm(delta~., data=train_data, gamma=0.001, cost=3, probability=TRUE)
+summary(svm_fit)
+# train predict
+svm_pred <- predict(svm_fit, train_data, probability = TRUE)
+svm_df <- data.frame(ID=train$ID, y=train$delta, pred=svm_pred)
+
+# test
+svm_test <- predict(svm_fit, test[,-1], probability = TRUE)
+submission["svm"] <- ifelse(svm_test>=sort(svm_test, decreasing = T)[317], 1, 0)
+```
+
+
+### Random Forest  
+```{r warning = FALSE, message = FALSE}
+rfcv_fit <- rfcv(train_data[,-34], train_data$delta, cv.fold = 10)
+rfcv_pred <- rfcv_fit$predicted$`8`
+rf_df <- data.frame(ID=train$ID, y=train$delta, pred=rfcv_pred)
+
+rf_model <- randomForest(delta ~ ., data=train_data, mtry = floor(sqrt(34)), ntree = 500, importance = T)
+
+#rf_model
+varImpPlot(rf_model,main = "rf : feature_importance")
+
+# train predict
+rf_pred <- predict(rf_model, train_data)
+rf_df2 <- data.frame(ID=train$ID, y=train$delta, pred=rf_pred)
+
+# test
+rf_test <- predict(rf_model, test[,-1])
+submission["rf"] <- ifelse(rf_test>=sort(rf_test, decreasing = T)[317], 1, 0)
+```
+
+### Neural Network
+```{r warning = FALSE, message = FALSE}
+set.seed(2021)
+nn_model <- nnet(delta ~. , data=train_data, size = 5, decay = 5e-04, na.action = na.omit)
+garson(nn_model)+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+# train predict
+nn_pred <- predict(nn_model, train_data)[,1]
+nn_df <- data.frame(ID=train$ID, y=train$delta, pred=nn_pred)
+
+# test
+nn_test <-predict(nn_model,newdata=test[,-1])[,1]
+submission["nn"] <- ifelse(nn_test>=sort(nn_test, decreasing = T)[317], 1, 0)
+```
+
+
+### ML Lift plot 
+
+```{r}
+knn.lift <- make.lift(knn_df)
+lda.lift <- make.lift(lda_df)
+svm.lift <- make.lift(svm_df)
+rf.lift2 <- make.lift(rf_df2)
+nn.lift <- make.lift(nn_df)
+
+## lift plot 
+color_list <- c("cornflowerblue", "orange", "red2", "forestgreen", "black")
+plot(knn.lift[,3], type = 'l',col=color_list[1], main="lift curve", ylab="", ylim=c(0,10), lwd=2)
+lines(lda.lift[,3], type = 'l',col=color_list[2], lwd=2)
+lines(svm.lift[,3],type = 'l', col = color_list[3], lwd=2)
+lines(rf.lift2[,3], type = 'l',col = color_list[4], lwd=2)
+lines(nn.lift[,3], type = 'l',col=color_list[5], lwd=2)
+legend('topright', legend = c("KNN", "LDA", "SVM", "randomForest","NN"), 
+       col = color_list, lty=rep(1,6), lwd=2, inset = c(0.02, 0.04))
+
+```
+
+```{r}
+knn.lift <- make.lift(knn_df)
+lda.lift <- make.lift(lda_df)
+svm.lift <- make.lift(svm_df)
+rf.lift <- make.lift(rf_df)
+nn.lift <- make.lift(nn_df)
+
+## lift plot 
+color_list <- c("cornflowerblue", "orange", "red2", "forestgreen", "black")
+plot(knn.lift[,3], type = 'l',col=color_list[1], main="lift curve", ylab="", ylim=c(0,6.5), lwd=2)
+lines(lda.lift[,3], type = 'l',col=color_list[2], lwd=2)
+lines(svm.lift[,3],type = 'l', col = color_list[3], lwd=2)
+lines(rf.lift[,3], type = 'l',col = color_list[4], lwd=2)
+lines(nn.lift[,3], type = 'l',col=color_list[5], lwd=2)
+legend('topright', legend = c("KNN", "LDA", "SVM", "RandomForest","NN"), 
+       col = color_list, lty=rep(1,6), lwd=2 , inset = c(0.02, 0.04))
+
+```
+
+```{r}
+plot(rf.lift[,3], type = 'l',col="brown1", main="lift curve of randomforest", ylab="", ylim=c(0,10), lwd=2)
+lines(rf.lift2[,3], type = 'l',col="darkolivegreen4", lwd=2)
+legend("topright", legend = c("after 10-fold CV", "before 10-fold CV"), col=c("brown1", "darkolivegreen4"), lty=c(1,1), lwd=c(2,2), inset = c(0.02, 0.04))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

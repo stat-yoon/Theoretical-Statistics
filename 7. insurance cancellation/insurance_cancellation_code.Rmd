@@ -1,0 +1,540 @@
+---
+
+title: "hw7"
+output: 
+  html_document: 
+    df_print: kable
+    theme: paper
+    toc: yes
+    toc_float: yes
+---
+
+```{r warning=FALSE, message=FALSE}
+library(readxl); library(tidyverse); library(GGally); library(ggplot2); library(gridExtra); library(lubridate); library(bestglm); library(ROCR); library(gam); library(MASS); library(caret); library(e1071); library(kknn); library(class);library(survival); library(survminer); library(mltools); library(data.table); library(reshape);
+library(kableExtra); library(devtools); library(nnet); library(NeuralNetTools); library(xgboost); library(randomForest)
+```
+
+# PART I 
+```{r}
+df <- read_excel('C:/rr/과제#7-SAS보험이탈자료-분석용.xls', sheet = 1)
+
+# 전처리 및 파생변수 함수
+
+data.setting <- function(df){
+  
+  data<-df%>% 
+  mutate(해지=as.factor(해지), 수금방법=as.factor(수금방법),
+         부활유무=as.factor(부활유무), 계약일자=as.Date(계약일자,format = c("%Y%m%d")), 지급만기일자=as.Date(지급만기일자,format = c("%Y%m%d")),
+         상품소분류=as.factor(상품소분류), 상품중분류=as.factor(상품중분류))
+  
+  #계약상의 날짜인 0229가 윤년에만 존재하므로, 날짜로 바꿀 때 NA가 생성된다. 따라서 임의로 3월 1일로 정정하였다. 
+  
+  is.na(data$지급만기일자) -> na.list  
+  data$지급만기일자[na.list] <- as.Date(gsub("0229", "0301", df$지급만기일자[na.list]),
+                                   format = c("%Y%m%d"))
+  
+  ## 파생변수 
+  data %>% mutate(
+  
+  계약기간 = round(as.numeric(지급만기일자-계약일자)/365), #계약기간(년)
+  납입방법 = ifelse(납입방법=="1",1,ifelse(납입방법=="2",3,ifelse(납입방법=="3",6,12))),
+  최종납입기간 = 최종납입횟수 * 납입방법, 
+  납입비율 = round(최종납입기간/(납입기간*12)*100),
+  지급만기기간 = ((12*year(지급만기일자)+month(지급만기일자)) - (12*2001+6)),
+  보험료 = 보험료/납입방법,
+
+  연체 = floor(((12*2001+6)-(12*year(data$계약일자)+month(계약일자))+1)/납입방법) - 최종납입횟수
+  
+  )  -> result
+  
+  result[result$납입비율==Inf, "납입비율"] <- 0
+  result[result$연체<0, '연체'] <- 0
+  ind <- which(result$지급만기기간 > 9000)  
+  result[ind, "지급만기기간"] <- with(result[ind,], (150-((2001-year(계약일자))+가입연령))*12)
+  result[result$납입비율==100, '연체'] <- 0
+  result["납입방법"] <- as.factor(result$납입방법)
+  ## 사용하지않는 변수 제거 
+  #result %>% dplyr::select(-최종납입횟수,-계약일자,-지급만기일자)
+  
+  return(result)
+}
+
+data.setting(df) -> data 
+#6~9월 만기 고객 제거
+data <- data %>% filter(지급만기일자>="2001-10-1")
+
+# 변수 제거 
+data %>% dplyr::select(-최종납입횟수,-계약일자,-지급만기일자, -계약기간) -> data
+
+
+
+head(data)
+```
+
+
+## a
+```{r warning=FALSE, message=FALSE}
+# 가입연령, 납입기간, 보험료, 최종납입횟수의 histogram
+g1 <- data %>% filter(!is.na(data$해지)) %>% ggplot() + geom_boxplot(aes(y=가입연령, x = 해지))
+g2 <- data %>% filter(!is.na(data$해지)) %>% ggplot() + geom_boxplot(aes(y=납입기간, x =해지))
+g3 <- data %>% filter(!is.na(data$해지)) %>% ggplot() + geom_boxplot(aes(y=보험료, x =해지))
+
+grid.arrange(g1, g2, g3, ncol=3)
+
+
+g1 <- ggplot(data) + geom_histogram(aes(보험료), bins=30)
+g2 <- ggplot(data) + geom_histogram(aes(log(보험료)), bins=30)
+grid.arrange(g1, g2)
+
+data$보험료 <- log(data$보험료)
+```
+
+보험료의 분포를 확인한 후 log 변환
+
+```{r warning=FALSE, message=FALSE}
+# split
+train <- data[data$자료 == 1,] %>% dplyr::select(-자료)
+test <- data[data$자료 == 2,] %>% dplyr::select(-자료)
+
+# 변수 선택
+aa <- cbind(train[,c(2:13)], 해지 = as.factor(train$해지))
+
+# glm
+glm_probit <- glm(해지 ~ ., family = binomial(link = "probit"), data = train)
+glm_logit <- glm(해지 ~ ., family = binomial(link = "logit"), data = train)
+cloglog = function(x) log(-log(1-x))
+glm_gompit <- glm(해지 ~ ., family = binomial(link = cloglog), data = train)
+
+glm_probit2 <- glm(해지 ~ .*., family = binomial(link = "probit"), data = train)
+prob_both <- step(glm_probit, scope = formula(glm_probit2), trace=F)
+prob_sub <- bestglm(aa, family = binomial(link = "probit"), IC = "AIC")
+prob_simp_step <- step(glm_probit, trace=F)
+
+glm_logit2 <- glm(해지 ~ .*., family = binomial(link = "logit"), data = train)
+log_both <- step(glm_logit,  scope = formula(glm_logit2), trace=F)
+log_sub <- bestglm(aa, family = binomial(link = "logit"), IC = "AIC")
+log_simp_step <- step(glm_logit, trace=F)
+
+glm_gompit2<- glm(해지 ~ .*., family = binomial(link = cloglog), data = train)
+gomp_both <- step(glm_gompit, scope = formula(glm_gompit2), trace=F)
+gomp_sub <- bestglm(aa, family = binomial(link = cloglog), IC = "AIC")
+gomp_simp_step <- step(glm_gompit, trace=F)
+
+prob_aic <- rbind(simple=extractAIC(glm_probit), simple_stepwise=extractAIC(prob_simp_step), interaction=extractAIC(glm_probit2), stepwise=extractAIC(prob_both), subset=extractAIC(prob_sub$BestModel))
+logit_aic <- rbind(simple=extractAIC(glm_logit),  simple_stepwise=extractAIC(log_simp_step),interaction=extractAIC(glm_logit2), stepwise=extractAIC(log_both), subset=extractAIC(log_sub$BestModel))
+gomp_aic <- rbind(simple=extractAIC(glm_gompit),  simple_stepwise=extractAIC(gomp_simp_step),interaction=extractAIC(glm_gompit2), stepwise=extractAIC(gomp_both), subset=extractAIC(gomp_sub$BestModel))
+prob_aic
+logit_aic
+gomp_aic
+```
+
+AIC가 가장 작은 gompit 선택
+
+## b
+```{r warning=FALSE, message=FALSE}
+# GAM
+gam <- gam(해지 ~ 가입연령 + 납입방법 + 납입기간 + 수금방법 + 보험료 + 부활유무 + 상품중분류 + 상품소분류 + 최종납입기간 + 납입비율 + 연체 + 지급만기기간, data=train, family=binomial)
+
+gam_scope = list("가입연령" = ~1 + 가입연령 + s(가입연령, 4) + s(가입연령, 8),
+                 "납입방법" = ~1 + 납입방법,
+                 "납입기간" = ~1 + 납입기간 + s(납입기간, 4) + s(납입기간, 8),
+                 "수금방법" = ~1 + 수금방법,
+                 "보험료" = ~1 + 보험료 + s(보험료, 4) + s(보험료, 8),
+                 "부활유무" = ~1 + 부활유무,
+                 #"최종납입횟수" = ~1 + 최종납입횟수 + s(최종납입횟수, 4) + s(최종납입횟수, 8),
+                 "상품중분류" = ~1 + 상품중분류,
+                 "상품소분류" = ~1 + 상품소분류,
+                 "최종납입기간" = ~1 + 최종납입기간 + s(최종납입기간, 4) + s(최종납입기간, 8),
+                 "납입비율" = ~1 + 납입비율 + s(납입비율, 4) + s(납입비율, 8),
+                 "연체" = ~1 + 연체 + s(연체, 4) + s(연체, 8),
+                 "지급만기기간" = ~1 + 지급만기기간 + s(지급만기기간, 4) + s(지급만기기간, 8))
+                 
+gam_step <- step.Gam(gam, scope = gam_scope, trace=F)
+
+c('GAM AIC: ', gam_step$aic)
+
+# plot
+par(family = "AppleGothic") 
+plot(gam_step)
+```
+
+
+# PART II
+## a
+```{r warning = FALSE, message = FALSE}
+sur.cox <- coxph(Surv(최종납입기간, (as.numeric(해지)-1)) ~., data = train)
+ggsurvplot(survfit(sur.cox), data=train, conf.int = FALSE)
+
+#summary(sur.cox)
+cox.model<-stepAIC(sur.cox,direction = "both", trace = 0)
+summary(cox.model)
+AIC(cox.model)
+ggforest(cox.model, data = train)
+ggsurvplot(survfit(cox.model), data=train, conf.int = FALSE)
+
+```
+
+## b
+
+```{r warning = FALSE, message = FALSE}
+train.c <-cbind(data.frame(scale(train[,-c(1,3,5,7,8,9,10)],scale=F)),train[,c(1,3,5,7,8,9,10)])
+cox.model2 <- coxph(Surv(최종납입기간,as.numeric(해지)) ~가입연령+납입기간+보험료+납입비율, data = train.c)
+
+S <- basehaz(cox.model2)
+
+lm <- lm(log(hazard)~log(time), data = S)
+alpha <- summary(lm)$coefficients[1]
+beta <- summary(lm)$coefficients[2]
+ 
+Ht <- exp(alpha+beta*log(train$최종납입기간))
+Ht.delta <- exp(alpha+beta*log((train$최종납입기간+3)))
+St<- exp(-Ht)
+St.delta<-exp(-Ht.delta)
+
+mu.cox <- exp(predict(cox.model2,train.c, type = 'lp'))
+p.cox <- 1-(St.delta/St)^mu.cox
+hist(p.cox)
+sum(is.na(p.cox))
+ggsurvplot(survfit(cox.model2), data=train.c, conf.int = FALSE)
+
+hx<-predict(cox.model2,train.c, type = 'expected') #hx 
+
+plot(log(hx) + log(3), log(p.cox), main = "[Survival]lnp* vs ln(hx)+ln(delta)",
+     xlab="ln(hx)+ln(delta)",ylab ="log(p)") + abline(0,1,col=2)
+plot(log(hx) + log(3),log(-log(1-gomp_both$fitted.values)),main = "[GLM]lnp* vs ln(hx)+ln(delta)",
+     xlab="ln(hx)+ln(delta)",ylab ="log(p)")+abline(0,1,col=2)
+plot(log(hx) + log(3),log(-log(1-gam_step$fitted.values)),main = "[GAM]lnp* vs ln(hx)+ln(delta)",
+     xlab="ln(hx)+ln(delta)",ylab ="log(p)")+abline(0,1,col=2)
+
+score<-exp(predict(cox.model2,train.c, type = 'lp'))
+```
+
+# PART III
+## a
+```{r}
+# 1) GLM 해지 확률
+glm_pred <- gomp_both$fitted.values
+glm_df <- data.frame(glm_y=train$해지, pred=glm_pred)
+glm_top500 <- glm_df[order(-glm_df$pred)[1:500],]
+
+# 2) GAM 해지 확률
+gam_pred <- gam_step$fitted.values
+gam_df <- data.frame(gam_y=train$해지, pred=gam_pred)
+gam_top500 <- gam_df[order(-gam_df$pred)[1:500],]
+
+# 3) Cox
+cox.result <-data.frame(score = score, y = train.c$해지) %>% arrange(desc(score))
+cox_top <- cox.result[1:500,]
+cox_top$ind <- row.names(cox_top)
+cox_top %>% arrange(desc(score)) %>% dplyr::select(ind) -> cox_ind
+
+# index(지수변수 구하기)
+head(row.names(glm_top500))
+head(row.names(gam_top500))
+head(cox_ind[1:500,])
+
+train_indicator <- data.frame(cbind(row.names(glm_top500), row.names(gam_top500), cox_ind[1:500,]))
+colnames(train_indicator) <- c('GLM', 'GAM', 'COX')
+#write_csv(data.frame(row.names(glm_top500)), 'train_glm지시변수.csv')
+#write_csv(data.frame(row.names(gam_top500)), 'train_gam지시변수.csv')
+#write.csv(cox_ind[1:500,],"train_cox지시변수.csv", row.names =F)
+#write.csv(train_indicator, 'train_indicator.csv', row.names=F)
+```
+
+## b
+```{r}
+# GLM
+glm_df <- glm_df %>% arrange(desc(pred))
+rownames(glm_df) <- 1:nrow(glm_df)
+mat <- matrix(0, ncol=3, nrow=10)
+mat[,1] <- sum(glm_df$glm_y==1)/nrow(glm_df)
+
+for (i in 1:10){
+  df <- glm_df[((i-1)*500+1):(i*500),]
+  df <- na.omit(df)
+  mat[i,2] <- sum(df$glm_y==1)/nrow(df)
+  mat[i,3] <- mat[i,2]/mat[i,1]
+}
+
+colnames(mat) <- c('tot_lift', 'row_lift', 'lift')
+mat
+
+# GAM
+gam_df <- gam_df %>% arrange(desc(pred))
+rownames(gam_df) <- 1:nrow(gam_df)
+mat2 <- matrix(0, ncol=3, nrow=10)
+mat2[,1] <- sum(gam_df$gam_y==1)/nrow(gam_df)
+
+for (i in 1:10){
+  df <- gam_df[((i-1)*500+1):(i*500),]
+  df <- na.omit(df)
+  mat2[i,2] <- sum(df$gam_y==1)/nrow(df)
+  mat2[i,3] <- mat2[i,2]/mat2[i,1]
+}
+colnames(mat2) <- c('tot_lift', 'row_lift', 'lift')
+mat2
+
+# cox
+df_cox<- cox.result %>% arrange(desc(score)) %>% mutate(y=as.numeric(as.character(y)))
+rownames(df_cox) <- 1:nrow(df_cox)
+mat3 <- matrix(0, ncol=3, nrow=10)
+mat3[,1] <- sum(df_cox$y==1)/nrow(df_cox)
+
+for (i in 1:10){
+  df <- df_cox[((i-1)*500+1):(i*500),]
+  df <- na.omit(df)
+  mat3[i,2] <- sum(df$y,na.rm=T)/nrow(df)
+  mat3[i,3] <- mat3[i,2]/mat3[i,1]
+}
+
+colnames(mat3) <- c('tot_lift', 'row_lift', 'lift')
+mat3
+
+#plot(mat3[,3], type="l",ylab = "lift value", xlab = "level ( by 500 )", main = "CoxPHM 10% lift chart")
+```
+
+## c
+```{r}
+### 1) GLM
+glm_predict <- prediction(glm_df$pred, glm_df$glm_y)
+glm_fit <- performance(glm_predict, 'lift', 'rpp')
+plot(glm_fit, col='red', main="lift curve of GLM model")
+
+### 2) GAM
+gam_predict <- prediction(gam_df$pred, gam_df$gam_y)
+gam_fit <- performance(gam_predict, 'lift', 'rpp')
+plot(gam_fit, col='blue', main="lift curve of GAM model")
+
+### 3) Cox
+cox.lift<-prediction(p.cox,cox.result$y)
+cox.lift <- performance(cox.lift, measure="lift", "rpp")
+plot(cox.lift , main="lift curve : Cox.PHM",col = 2)
+
+plot(glm_fit, col="red", main="lift curve")
+plot(gam_fit, col="blue", add=TRUE)
+plot(cox.lift, col = "green", add=TRUE)
+legend(x=0.82, y=24, legend = c("GLM", "GAM", "COX"), col = c("red", "blue", "green"), lty=c(1,1))
+```
+
+## d
+```{r}
+c('GLM AIC: ', round(AIC(gomp_both)), 'GAM AIC: ', round(gam_step$aic), 'COX AIC: ', round(AIC(cox.model)))
+```
+
+## e
+```{r}
+### 1) GLM 해지 확률
+glm_yhat <- predict(gomp_both, newdata = test, type = 'response')
+glm_df <- data.frame(index=seq(1:4997), perc=glm_yhat)
+glm_pred_top500 <- glm_df[order(-glm_df$perc),]$index[1:500]
+
+### 2) GAM 해지 확률
+gam_yhat <- predict(gam_step, newdata = test, type = 'response')
+gam_df <- data.frame(index=seq(1:4997), perc=gam_yhat)
+gam_pred_top500 <- gam_df[order(-gam_df$perc),]$index[1:500]
+
+### 3) COX 해지 확률
+test$해지 <- as.numeric(test$해지)
+test.c <-cbind(data.frame(scale(test[,-c(1,3,5,7,8,9,10)],scale=F)),test[,c(3,5,7,8,9,10)])
+test.score<-exp(predict(cox.model2,test.c, type = 'lp'))
+cox_top <-data.frame(p.cox = sort(test.score,decreasing = T)[1:500]) 
+cox_top$ind <- row.names(cox_top)
+
+#head(glm_pred_top500)
+#head(gam_pred_top500)
+#head(cox_top[2])
+
+test_indicator <- data.frame(cbind(glm=glm_pred_top500, gam=gam_pred_top500, cox=cox_top$ind))
+#write.csv(glm_pred_top500, 'glm지수변수.csv', row.names=FALSE)
+#write.csv(gam_pred_top500, 'gam지수변수.csv', row.names=FALSE)
+#write.csv(cox_top[2],"test_indicator.csv", row.names =F)
+write.csv(test_indicator, 'C:/rr/이통7/final/test_indicator.csv', row.names=F)
+```
+
+
+## f.
+```{r message=FALSE, warning=FALSE, error=TRUE}
+train.s <- train
+min_max <- function(x){ return((x-min(x))/(max(x)-min(x)))}
+train.s[,-c(1,3,5,7,8,9)] <- as.data.frame(lapply(train.s[,-c(1,3,5,7,8,9)], min_max))
+```
+
+### LDA
+```{r}
+ld <- lda(해지~., data=train)
+ld_hat <- predict(ld, train)
+ldahist(ld_hat$x, g=train$해지)
+# CrossTable(train2$해지, ld_hat$class, prop.chisq=FALSE)
+
+lda_pred <- prediction(ld_hat$posterior[,2], train$해지)
+lda_perf <- performance(lda_pred, "lift", "rpp")
+plot(lda_perf, main="lift curve of LDA", colorize=TRUE)
+```
+
+### KNN
+```{r}
+set.seed(123)
+
+train2 <- train.s
+train2$해지 <- ifelse(train2$해지==1, "yes", "no")
+control <- trainControl(method="repeatedcv",
+                        number=10,
+                        repeats = 30,
+                        classProbs = TRUE)
+kn <- train(해지~., data=train2, method="knn", trControl=control)
+best_k <- kn$bestTune
+kn_fit <- knn(train=train2[,-1], cl=train2$해지, test=train2[,-1], k=best_k, prob=TRUE)
+
+knn_pred <- prediction(1-attr(kn_fit,"prob"), train$해지)
+knn_perf <- performance(knn_pred, "lift", "rpp", main="lift curve", colorize=TRUE)
+plot(knn_perf, main="lift curve of KNN", colorize=TRUE)
+```
+
+### SVM
+```{r}
+svm.t <- tune.svm(해지~., data=train, gamma=c(0.05,0.01), cost=c(7,8))
+svm_fit <- svm(해지~., data=train, gamma=0.05, cost=7, probability=TRUE) 
+summary(svm_fit)
+svm_hat <- predict(svm_fit, train, probability = TRUE)
+
+svm_pred <- prediction(attr(svm_hat,"prob")[,2], train$해지)
+svm_perf <- performance(svm_pred, "lift", "rpp", main="lift curve", colorize=TRUE)
+plot(svm_perf, main="lift curve of SVM", colorize=TRUE)
+```
+
+```{r warning = FALSE, message = FALSE}
+#scaling 
+train.scale <- cbind(scale(train[-c(1,3,5,7,8,9)]), train[c(1,3,5,7,8,9)])
+
+#one-hot-encoding
+train.one <- train %>% mutate(해지=as.numeric(해지)-1)
+train.one<-one_hot(as.data.table(train.one))
+xgb.train <- xgb.DMatrix(data=as.matrix(train.one[,-1]),label=train.one$해지)
+```
+
+### Random Forest 
+```{r warning = FALSE, message = FALSE}
+rf_model <- randomForest(해지 ~ ., data=train, mtry = floor(sqrt(13)), ntree = 500, importance = T)
+rf_model
+#mtry :각각의 tree마다 몇 개의 feature를 사용/ 보통 classification의 경우 sqrt(변수갯수)
+#importance(rf_model)
+
+varImpPlot(rf_model,main = "rf : feature_importance")
+rf_pred <- predict(rf_model, train, type = "prob")[,2]
+table(rf_pred>0.5, train$해지)
+```
+
+### Neural Network
+scaling data를 이용해야만 label = 1인 예측을 함. 
+
+```{r warning = FALSE, message = FALSE}
+#train.scale["납입방법"] <- as.numeric(as.character(train.scale$납입방법))
+#train.scale["납입방법"] <- as.factor(train.scale$납입방법)
+set.seed(1004)
+#상품소분류 제외하고 fitting 
+nn_model <- nnet(해지 ~. , data=train.scale[,c(-9,-13)], size = 4, decay = 5e-04)
+
+#summary(nn_model)
+garson(nn_model)+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+### predict 
+nn_pred<-predict(nn_model,newdata=train.scale)
+table(nn_pred>0.5,train.scale$해지)
+```
+
+### XGBoost 
+```{r warning = FALSE, message = FALSE}
+# Train the XGBoost classifer
+xgb_model =xgb.train(
+  data=xgb.train,
+  max.depth = 5, eta = 0.01, nthread = 2, nrounds = 2, objective = "binary:logistic",
+  subsample = 0.8, min_child_weight = 1, verbose=0
+)
+
+# Predict 
+xgb_pred = predict(xgb_model,newdata = xgb.train,reshape=T) 
+table(xgb_pred>0.5,train$해지)
+
+xgb.importance(model = xgb_model) -> xgb_imp
+xgb.plot.importance(importance_matrix = xgb_imp,main="XGB : feature imp") 
+```
+
+```{r warning = FALSE, message = FALSE}
+train_pred <- data.frame(true.y = factor(train$해지), rf = rf_pred , xgb = c(xgb_pred) ,nn = nn_pred)
+
+# lift_curve <- lift(true.y ~ rf+ xgb + nn , data = train_pred)
+# ggplot(lift_curve$data) + geom_line(aes(cuts, lift , color = liftModelVar),size = 1.2, alpha = 0.6)
+
+rf.lift <- performance(prediction(train_pred$rf, train_pred$true.y), 'lift', 'rpp')
+xgb.lift <- performance(prediction(train_pred$xgb, train_pred$true.y), 'lift', 'rpp')
+nn.lift <- performance(prediction(train_pred$nn, train_pred$true.y), 'lift', 'rpp')
+```
+### Lift plot
+```{r}
+plot(knn_perf, main="lift curve", col=1, ylim=c(0, 25))
+plot(svm_perf, col=2, add=TRUE)
+# plot(lda_perf, col=3, add=TRUE)
+plot(rf.lift, col=3, add=TRUE, lwd=3)
+plot(xgb.lift, col=4, add=TRUE)
+plot(nn.lift, col=5, add=TRUE)
+legend("topright", legend = c("KNN", "SVM", "RandomForest", "XGB" ,"NN"), col = c(1:5), lty=rep(1,5), inset=0.05)
+```
+
+## g
+```{r}
+test <- test %>% dplyr::select(-해지)
+
+# LDA
+test_lda <- predict(ld, test)$posterior[,2]
+test_lda <- data.frame(n = 1:length(test_lda), prob=test_lda) %>% arrange(desc(prob))
+head(test_lda)
+
+# KNN
+set.seed(123)
+test.s <- test
+test.s[,-c(2,4,6,7,8)] <- as.data.frame(lapply(test.s[,-c(2,4,6,7,8)], min_max))
+test_knn <- knn(train=train2[,-1], cl=train2$해지, test=test.s, k=best_k, prob=TRUE)
+test_knn <- 1-attr(test_knn,"prob")
+test_knn <- data.frame(n = 1:length(test_knn), prob=test_knn) %>% arrange(desc(prob))
+head(test_knn)
+
+# SVM
+test_svm <- predict(svm_fit, test, probability = TRUE)
+test_svm <- attr(test_svm, "prob")[,2]
+test_svm <- data.frame(n = 1:length(test_svm), prob=test_svm) %>% arrange(desc(prob))
+head(test_svm)
+```
+
+```{R warning = FALSE, message = FALSE}
+# scaling 
+test.scale <- cbind(scale(test[-c(2,4,6,7,8)]), test[c(2,4,6,7,8)])
+test.scale$납입방법 <- as.numeric(as.character(test.scale$납입방법))
+
+
+# one-hot-encoding
+test.one<-one_hot(as.data.table(test))
+xgb.test <- as.matrix(test.one)
+
+### test 
+rf_pred<-predict(rf_model,newdata=test,type="prob")[,2]
+nn_pred<-predict(nn_model,newdata=test.scale)
+xgb_pred = predict(xgb_model,newdata = xgb.test,reshape=T)
+
+table(rf_pred>0.5)
+table(nn_pred>0.5)
+table(xgb_pred>0.5)
+
+### top 10% 
+final_predict <- data.frame(rf = rf_pred, nn = nn_pred, xgb = xgb_pred)
+final_predict$ind <- row.names(final_predict)
+
+final_predict %>% arrange(desc(rf_pred)) %>% dplyr::select(ind) -> rf_ind
+final_predict %>% arrange(desc(nn_pred)) %>% dplyr::select(ind) -> nn_ind
+final_predict %>% arrange(desc(xgb_pred)) %>% dplyr::select(ind)-> xgb_ind
+
+final_ind<- data.frame(rf_ind,nn_ind,xgb_ind)
+colnames(final_ind)<-c("RandomForest","NN","XGB")
+
+test_indicator <- data.frame(cbind(LDA=test_lda[,1], KNN=test_knn[,1], SVM=test_svm[,1], final_ind))
+#write.csv(test_indicator, 'test_indicator.csv', row.names = FALSE)
+```

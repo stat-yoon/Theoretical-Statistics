@@ -1,0 +1,259 @@
+---
+title: "HIV/AIDS"
+output: html_document
+---
+
+```{r warning=FALSE}
+library(readxl); library(dplyr); library(ggplot2); library(gridExtra); library(zoo)
+```
+
+## 1. 미국 분기별 HIV/AIDS 감염자
+```{r}
+usa_hiv <- read_excel('DRAM-AIDS-자료.xls',sheet=2)
+
+names(usa_hiv) <- c('years', 'quarter', 't', 'St', 'Yt')
+usa_hiv <- usa_hiv[1:68,]
+usa_hiv$years <- rep(1981:1997, each=4)
+
+head(usa_hiv)
+```
+
+### a. 시계열 도표
+```{r}
+usa_hiv$year_quarter <- paste0(usa_hiv$years, '-', usa_hiv$quarter)
+usa_hiv$year_quarter <- as.yearqtr(usa_hiv$year_quarter, format='%Y-%q')
+ggplot(data=usa_hiv, aes(x=year_quarter, y=St, group=1)) + geom_line() + scale_x_yearqtr(format='%YQ%q') + xlab('Year-Quarter') + ylab('Number of Infections') + ggtitle('Quarterly HIV/AIDS Infections(1981~1997)')
+
+ggplot(data=usa_hiv, aes(x=year_quarter, y=Yt, group=1)) + geom_line() + scale_x_yearqtr(format='%YQ%q') + xlab('Year-Quarter') + ylab('Cumulative Number of Infections') + ggtitle('Quarterly HIV/AIDS Cumulative Infections(1981~1997)')
+```
+
+### b. OLS 추정
+```{r}
+usa_hiv["Yt_lag"] <- lag(usa_hiv$Yt)
+usa_hiv[1,"Yt_lag"] <- 0
+
+bass.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]; c <- coef[[3]]
+  m <- round((-b-sqrt(b^2-4*a*c))/(2*c),3)
+  p <- round(a/m,3)
+  q <- round(-c*m,3)
+  return(list(p=p, q=q, m=m))
+}
+
+logit.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]
+  q <- round(a,3)
+  m <- round(-a/b,3)
+  return(list(p=0, q=q, m=m))
+}
+
+gumbel.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]
+  q <- round(-b,3)
+  m <- round(exp(-a/b),3)
+  return(list(p='X', q=q, m=m))
+}
+```
+
+```{r}
+## n=20
+# Bass
+lm20_b <- lm(St ~ Yt_lag + I(Yt_lag^2), data=usa_hiv[1:20,])
+Bass <- bass.coef(lm20_b$coef)
+
+# Logistic
+lm20_l <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=usa_hiv[1:20,])
+Logistic <- logit.coef(lm20_l$coef)
+
+# Gumbel
+lm20_g <- lm(St ~ Yt_lag + I(Yt_lag*log(Yt_lag)) -1, data=usa_hiv[2:20,])
+Gumbel <- gumbel.coef(lm20_g$coef)
+summary(lm20_g)
+
+n20 <- cbind(Bass, Logistic, Gumbel)
+
+## n=40
+# Bass
+lm40_b <- lm(St ~ Yt_lag + I(Yt_lag^2), data=usa_hiv[1:40,])
+Bass <- bass.coef(lm40_b$coef)
+
+# Logistic
+lm40_l <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=usa_hiv[1:40,])
+Logistic <- logit.coef(lm40_l$coef)
+
+# Gumbel
+lm40_g <- lm(St ~ Yt_lag + I(Yt_lag*log(Yt_lag)) -1, data=usa_hiv[2:40,])
+Gumbel <- gumbel.coef(lm40_g$coef)
+
+n40 <- cbind(Bass, Logistic, Gumbel)
+
+## n=65
+# Bass
+lm65_b <- lm(St ~ Yt_lag + I(Yt_lag^2), data=usa_hiv[1:65,])
+Bass <- bass.coef(lm65_b$coef)
+
+# Logistic
+lm65_l <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=usa_hiv[1:65,])
+Logistic <- logit.coef(lm65_l$coef)
+
+# Gumbel
+lm65_g <- lm(St ~ Yt_lag + I(Yt_lag*log(Yt_lag)) -1, data=usa_hiv[2:65,])
+Gumbel <- gumbel.coef(lm65_g$coef)
+
+n65 <- cbind(Bass, Logistic, Gumbel)
+
+n20; n40; n65
+```
+
+```{r}
+# 상대오차(실제값 2019년 누적 감염자 수)
+m_real <- 1189700
+
+m <- c(n20[3], n20[3,2], n20[3,3], n40[3], n40[3,2], n40[3,3], n65[3], n65[3,2], n65[3,3])
+for (i in m){
+  re = (100*(i - m_real)/m_real)
+  print(round(re,3))
+  }
+```
+
+### c. 예측 값
+```{r}
+predict <- data.frame(bass = predict(lm65_b), logistic = predict(lm65_l), gumbel = predict(lm65_g), real = usa_hiv[1:65,'Yt'])
+head(predict)
+```
+
+## 2. 국내 연도별 HIV/AIDS 감염자 현황
+
+```{r}
+k_hiv <- read.csv('korean_hiv.csv', header = TRUE)
+colnames(k_hiv) <- c('year', 'St')
+k_hiv <- k_hiv %>% mutate(Yt = cumsum(St))
+k_hiv["Yt_lag"] <- lag(k_hiv$Yt)
+k_hiv[1,"Yt_lag"] <- 0
+head(k_hiv)
+```
+
+### a. 시계열 도표
+```{r}
+ggplot(data=k_hiv[1:35,], aes(x=year, y=St)) + geom_line() + ylab('Number of Infections') + ggtitle('Korean HIV/AIDS Infections(1985~2019)')
+ggplot(data=k_hiv[1:35,], aes(x=year, y=Yt)) + geom_line() + ylab('Number of Cumulative Infections') + ggtitle('Cumulative Korean HIV/AIDS Infections(1985~2019)')
+```
+
+### b. OLS 추정
+```{r}
+## (dlnYt, Yt) 및 (dlnYt, lnYt) 산점도
+# dlnYt = St/Yt-1 -> Appendix OLS 부분 설명 참고
+k_hiv <- k_hiv %>% mutate(dlnYt = St/Yt_lag)
+
+g1 <- ggplot(k_hiv, aes(dlnYt, Yt)) + geom_point() + ggtitle('Plot of (dlnYt, Yt)')
+g2 <- ggplot(k_hiv, aes(dlnYt, log(Yt))) + geom_point() + ggtitle('Plot of (dlnYt, lnYt)')
+grid.arrange(g1, g2, ncol=2)
+```
+
+```{r}
+## (dlnYt, Yt) 및 (dlnYt, lnYt) 산점도
+# dlnYt = lnYt - lnYt-1 -> Appendix OLS Exponential 부분 설명 참고
+par(mfrow=c(1,2))
+plot(log(k_hiv$Yt) - log(k_hiv$Yt_lag)~k_hiv$Yt)
+plot(log(k_hiv$Yt) - log(k_hiv$Yt_lag)~log(k_hiv$Yt))
+```
+
+```{r}
+## 방법1. OLS method로 (m, q) 추정
+# Logistic model
+lm_l <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=k_hiv)
+Logistic <- logit.coef(lm_l$coef)
+
+# Gumbel model
+lm_g <- lm(St ~ Yt_lag + I(Yt_lag*log(Yt_lag)) -1, data=k_hiv)
+Gumbel <- gumbel.coef(lm_g$coef)
+
+mat_2b1 <- cbind(Logistic, Gumbel)
+
+
+## 방법2. 최근 7년간의 자료만을 이용하여 (m,q) 추정
+k_hiv_7 <- tail(k_hiv, 7)
+# Logistic model
+lm_l <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=k_hiv_7)
+Logistic <- logit.coef(lm_l$coef)
+
+# Gumbel model
+lm_g <- lm(St ~ Yt_lag + I(Yt_lag*log(Yt_lag)) -1, data=k_hiv_7)
+Gumbel <- gumbel.coef(lm_g$coef)
+
+mat_2b2 <- cbind(Logistic, Gumbel)
+
+mat_2b1; mat_2b2;
+```
+
+### c. Q-Q plot
+```{r}
+## Q-Q Plot
+# Logistic model
+# 방법1(전체 데이터 사용)
+m = 22264.06
+k_hiv_l <- k_hiv %>% subset(year>=1995 & year<=2009) %>% mutate(Ur = Yt/(m+1), logistic=log(Ur/(1-Ur)), t=year)
+ggplot(k_hiv_l, aes(x=logistic, y=t)) + geom_point() + geom_smooth(method = 'lm') + ggtitle('Logistic Q-Q Plot with all data', round(summary(lm(t~logistic, data= k_hiv_l))$r.squared,3))
+
+summary(lm(t~logistic, data= k_hiv_l))$coef
+
+# 방법2(최근 7년간 데이터 사용)
+m = 23144.83
+k_hiv_l <- k_hiv_7 %>% mutate(Ur = Yt/(m+1), logistic=log(Ur/(1-Ur)), t=year)
+ggplot(k_hiv_l, aes(x=logistic, y=t)) + geom_point() + geom_smooth(method = 'lm')  + ggtitle('Logistic Q-Q Plot with ercent 7 years data', round(summary(lm(t~logistic, data= k_hiv_l))$r.squared,3))
+
+summary(lm(t~logistic, data= k_hiv_l))$coef
+```
+
+```{r}
+# Gumbel model
+# 방법1(전체 데이터 사용)
+m = 33501.29
+k_hiv_g <- k_hiv %>% subset(year>=1995 & year<=2009) %>% mutate(Ur = Yt/(m+1), gumbel = -log(-log(Ur)), t=year)
+ggplot(k_hiv_g, aes(x=gumbel, y=t)) + geom_point() + geom_smooth(method = 'lm') + ggtitle('Gumbel Q-Q Plot with all data', round(summary(lm(t~gumbel, data= k_hiv_g))$r.squared,3))
+
+
+summary(lm(t~gumbel, data= k_hiv_g))$coef
+
+# 방법2(최근 7년간 데이터 사용)
+m = 27264.78
+k_hiv_g <- k_hiv_7 %>% mutate(Ur = Yt/(m+1), gumbel = -log(-log(Ur)), t=year)
+ggplot(k_hiv_g, aes(x=gumbel, y=t)) + geom_point() + geom_smooth(method = 'lm') + ggtitle('Gumbel Q-Q Plot with recent 7 years data', round(summary(lm(t~gumbel, data= k_hiv_g))$r.squared,3))
+
+summary(lm(t~gumbel, data= k_hiv_g))$coef
+```
+
+### d. 미래 HIV 감염자 수 예측
+```{r}
+# Logistic model
+# 7년치 데이터
+m = 27264.78; mu = 2014.114; sigma = 5.322
+t <- c(1985:2040)
+St <- m*(1/sigma)*exp(-((t-mu)/sigma))/((1+exp(-(t-mu)/sigma))^2)
+pred_l <- data.frame(t, St)
+# 전체 데이터
+m = 22264.060; mu = 2012.418; sigma = 4.566
+t <- c(1985:2040)
+St <- m*(1/sigma)*exp(-((t-mu)/sigma))/((1+exp(-(t-mu)/sigma))^2)
+pred_l2 <- data.frame(t, St)
+
+# Gumbel model
+# 7년치 데이터
+m = 27264.78; mu = 2012.697; sigma = 9.102
+t <- c(1985:2040)
+St <- m*(1/sigma)*exp(-((t-mu)/sigma))*exp(-exp(-((t-mu)/sigma)))
+pred_g <- data.frame(t, St)
+# 전체 데이터
+m = 33501.290; mu = 2015.627; sigma = 13.735
+t <- c(1985:2040)
+St <- m*(1/sigma)*exp(-((t-mu)/sigma))*exp(-exp(-((t-mu)/sigma)))
+pred_g2 <- data.frame(t, St)
+```
+
+```{r}
+ggplot() + geom_line(data=k_hiv, aes(x=year, y=St, color='actual'), lwd=1) + geom_line(data=pred_l, aes(x=t, y=St, color='logistic'), lwd=1) + geom_line(data=pred_g, aes(x=t, y=St, color='gumbel'), lwd=1) + ylab('Infections') + ggtitle('Estimated and Actual Korean HIV/AIDS infections (used 7 yeas data)')
+```
+
+```{r}
+ggplot() + geom_line(data=k_hiv, aes(x=year, y=St, color='actual'), lwd=1) + geom_line(data=pred_l2, aes(x=t, y=St, color='logistic'), lwd=1) + ylab('Infections') + geom_line(data=pred_g2, aes(x=t, y=St, color='gumbel'), lwd=1) + ggtitle('(All Data) Estimated and Actual Korean HIV/AIDS infections (used all data)')
+```

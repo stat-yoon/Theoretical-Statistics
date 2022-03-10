@@ -1,0 +1,575 @@
+---
+title: "HW5_final"
+author: "TEAM1"
+date: '2021 10 11 '
+output: rmdformats::material
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(readxl)
+library(gridExtra)
+library(reshape)
+library(kableExtra)
+library(NormalLaplace)
+library(coda)
+library(plotly)
+
+options("scipen" = 100)
+```
+
+# part1 
+
+```{r}
+
+setwd('C:/temp/2021/theo_stat2/project#5')
+
+#월별 금리 it  
+data<- read_excel("CD유통수익률.xlsx")
+names(data) <- c("Date","it")
+
+#삼성전자/KTaG의 종가데이터
+samsung <- read.csv("samsung.csv")
+ktag <- read.csv("KTaG.csv")
+
+samsung$Date <- format(as.Date(samsung$Date),format = "%Y/%m")
+ktag$Date <- format(as.Date(ktag$Date),format = "%Y/%m")
+
+samsung %>% select("Date","Close") -> samsung
+ktag %>% select("Date","Close") -> ktag
+
+samsung %>% select("Date","Close") %>% merge(ktag,by = "Date") %>% merge(data,by="Date") %>% arrange("Date") -> data1
+names(data1) <-c("date","p1t","p2t","it")
+
+data1 %>% mutate(t = seq(0,nrow(data1)-1,1),lnp1t = log(p1t), lnp2t = log(p2t),
+                 r1t = (p1t-lag(p1t))/lag(p1t)  , r2t = (p2t-lag(p2t))/lag(p2t),
+                 r0t = (1+it*0.01)^(1/12)-1) %>% select(-it) -> data1
+head(data1)
+tail(data1)
+
+#part2 data 
+data2 <- read_excel("2005-Greenblatt-data1.xlsx")
+
+#write.csv(data1,"data1.csv")
+
+```
+
+
+### 1) 
+```{R}
+
+#월별종가
+melt(data1, id.vars = "date", measure.vars = c("p1t","p2t"),variable_name = "company") %>%
+  mutate(company = ifelse(company == "p1t","samsung","KTaG"))%>% ggplot() + geom_line(aes(date,value,group=company,color=company))+
+  scale_x_discrete(breaks = c('2011/01',"2012/01","2013/01","2014/01","2015/01","2016/01","2017/01","2018/01","2019/01","2020/01"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("2011 - 2020년 월별 종가") ->p1
+
+#로그종가 
+melt(data1, id.vars = "date", measure.vars = c("lnp1t","lnp2t"),variable_name = "company") %>%
+  mutate(company = ifelse(company == "lnp1t","samsung","KTaG"))%>% 
+  ggplot() + geom_line(aes(date,value,group=company,color=company))+
+  scale_x_discrete(breaks = c('2011/01',"2012/01","2013/01","2014/01","2015/01","2016/01","2017/01","2018/01","2019/01","2020/01"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("2011 - 2020년 월별 로그종가") ->p2
+
+grid.arrange(p1,p2)
+
+```
+
+
+### 2) 
+```{r warning = FALSE, message = FALSE}
+#시계열 도표 
+melt(data1, id.vars = "date", measure.vars = c("r1t","r2t"),variable_name = "company") %>% na.omit() %>%
+  mutate(company = ifelse(company == "r1t","samsung","KTaG"))%>% ggplot() + geom_line(aes(date,value,group=company,color=company))+
+  facet_wrap(~company)+
+  scale_x_discrete(breaks = c('2011/01',"2012/01","2013/01","2014/01","2015/01","2016/01","2017/01","2018/01","2019/01","2020/01"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("2011 - 2020년 월별 수익률")
+
+#histogram
+melt(data1, id.vars = "date", measure.vars = c("r1t","r2t"),variable_name = "company") %>% na.omit() %>%
+  mutate(company = ifelse(company == "r1t","samsung","KTaG"))%>% ggplot() +
+  geom_histogram(aes(value,group=company,fill=company),binwidth = 0.01)+
+  facet_wrap(~company)+ggtitle("2011 - 2020년 월별 수익률 히스토그램")
+
+#Q-Qplot 
+
+#삼성
+data1 %>% na.omit() %>% arrange(r1t) %>%mutate(normal=qnorm(order(r1t)/(nrow(data1)+1))) %>% 
+  ggplot(aes(normal,r1t))+ geom_point() + 
+  geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + 
+  ggtitle( "Samsung : normal Q-Q plot") -> qq1
+
+
+#kt&G
+data1 %>% na.omit() %>% arrange(r2t) %>%mutate(normal=qnorm(order(r2t)/(nrow(data1)+1))) %>% 
+  ggplot(aes(normal,r2t))+ geom_point() + 
+  geom_smooth(method="lm", se=F) + stat_regline_equation(aes(label = ..rr.label..)) + 
+  ggtitle( "KT&G : normal Q-Q plot") ->qq2
+
+grid.arrange(qq1,qq2,ncol=2)
+
+
+#자기상관도표 
+
+acf(data1$r1t,na.action=na.pass,type="correlation",main = "samsung 자기상관도표")
+acf(data1$r2t,na.action=na.pass,type="correlation",main = "KT&G 자기상관도표")
+
+```
+
+
+
+### 3) 
+```{r}
+
+melt(data1, id.vars = "date", measure.vars = c("r1t","r2t"),variable_name = "company") %>% na.omit() %>% 
+  mutate(company = ifelse(company == "r1t","samsung","KTaG"),
+         year = substr(date, 1, 4), type = ifelse(year>2015,"TEST","TRAIN")) ->data1.3 
+
+data1.3 %>%
+  group_by(company,type) %>% summarise(mu.hat=mean(value),sigma.hat = sqrt(var(value)),
+                                       .groups = 'drop')%>%
+  arrange(desc(company))
+
+data1 %>% na.omit() %>% mutate(year = substr(date, 1, 4))%>% filter(year>2015) -> test
+data1 %>% na.omit() %>% mutate(year = substr(date, 1, 4))%>% filter(year<=2015) -> train
+
+#cor
+cor(train$r1t,test$r1t) -> cor1#삼성전자
+cor(train$r2t,test$r2t) -> cor2#kt&G
+
+data.frame(samsung = cor1,KTaG = cor2)
+
+#분산공분산
+#train
+cov(data.frame(samsung=train$r1t,KTaG = train$r2t)) %>% round(4)
+#test 
+cov(data.frame(samsung = test$r1t,KTaG = test$r2t)) %>% round(4)
+
+```
+
+### 4) 
+
+```{R}
+test %>% mutate(t=seq(1:nrow(test)))->test
+
+rebalancing<- function(v0,theta0,theta1,theta2){
+  
+  rpt <- theta0 * test$r0t + theta1 * test$r1t + theta2 * test$r2t
+  vt <- v0*cumprod(1+rpt)
+  return(vt)
+  
+}
+
+v0<-1
+rebalancing(v0,1,0,0) -> test$vt0
+rebalancing(v0,0,1,0) -> test$vt1
+rebalancing(v0,0,0,1) -> test$vt2
+rebalancing(v0,1/3,1/3,1/3) -> test$vt3
+
+
+test %>% gather(key = "portfolio" , value = "vt", vt0,vt1,vt2,vt3) %>% ggplot() + geom_line(aes(date,vt,group=portfolio,color=portfolio))+
+  scale_color_discrete(labels = c("P0", "P1","P2","P3"))+
+  scale_x_discrete(breaks = c("2016/01","2017/01","2018/01","2019/01","2020/01"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("TEST : 포트폴리오별 가치(vt)")
+
+```
+
+### 5) 
+
+```{R}
+
+p10<- data1$p1t[data1$date =="2015/12"]
+p20<- data1$p2t[data1$date =="2015/12"]
+
+buy.hold <- function(v0,theta0,theta1,theta2){
+  r0.star <- cumprod(1+test$r0t) -1 
+  r1.star <- (test$p1t-p10)/p10
+  r2.star <- (test$p2t-p20)/p20
+
+  vt.star <- v0*(1+theta0 *r0.star + theta1 * r1.star + theta2 * r2.star)
+  return(vt.star)
+}
+
+rebalancing(v0,1/3,1/3,1/3) -> test$vt3.theta
+rebalancing(v0,0,1/2,1/2) -> test$vt4.theta
+buy.hold(v0,1/3,1/3,1/3) -> test$vt3.star
+buy.hold(v0,0,1/2,1/2) -> test$vt4.star
+
+day <- c("2016/01","2017/01","2018/01","2019/01","2020/01")
+
+test %>% gather(key = "portfolio" , value = "vt", vt3.theta,vt3.star) %>% ggplot() + geom_line(aes(date,vt,group=portfolio,color=portfolio))+
+  scale_x_discrete(breaks = day )+ scale_color_discrete(labels = c("buy.hold", "rebalancing"))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("(1/3,1/3,1/3)") ->p1
+
+test %>% gather(key = "portfolio" , value = "vt", vt4.theta,vt4.star) %>% ggplot() + geom_line(aes(date,vt,group=portfolio,color=portfolio))+
+  scale_color_discrete(labels = c("buy.hold", "rebalancing"))+
+  scale_x_discrete(breaks = day)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("(0,1/2,1/2)") ->p2
+
+grid.arrange(p1,p2,ncol=2)
+
+
+test %>% gather(key = "portfolio" , value = "vt", vt3.theta,vt3.star , vt4.theta,vt4.star) %>% ggplot() + geom_line(aes(date,vt,group=portfolio,color=portfolio))+
+  scale_x_discrete(breaks = day )+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +ggtitle("Buy and hold / rebalancing")
+
+
+```
+
+
+# part2
+
+### (a)
+```{r}
+data2<-read_excel('2005-Greenblatt-data1.xlsx')
+names(data2) <- c('event','stock','ROA','ROA.rank','PER','PER.rank','score','return','lnreturn','TA')
+
+
+ggplot(data2,aes(score,return))+geom_point()+ geom_smooth(method="lm", se=FALSE) +labs(x='그린블랏 매직점수',y='수익률')+ stat_regline_equation(formula = y~x, aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")))
+
+lm1<-lm(return~score,data2)
+kable(data.frame('intercept'=round(summary(lm1)$coef[1],3),'slope'=round(summary(lm1)$coef[2],3)))%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+#상관계수
+rho<-round(cor(data2$return,data2$score),3)
+#순위상관계수
+s.rho<-round(cor(data2$return,data2$score, method = "spearman"),3)
+k.rho<-round(cor(data2$return,data2$score, method = "kendall"),3)
+kable(data.frame('상관계수'=rho,'스피어만 순위상관계수'=s.rho,'켄달 순위상관계수'=k.rho))%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+### (b)
+```{r}
+df<-data2%>%arrange(score)%>%mutate(m = seq(1,50,1),rpt=cumsum(return)/m) %>% select(m,return,rpt)
+  
+b.plot<-ggplot(df,aes(m,rpt))+geom_line()+labs(x='상위 m개',y='수익률')  
+b.plot
+
+```
+
+### (c)
+```{r}
+roa.plot<-data2%>% 
+  ggplot( aes(ROA, lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+logroa.plot<-data2%>% 
+  ggplot( aes(log(ROA), lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+per.plot<-data2%>% 
+  ggplot( aes(PER, lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+logper.plot<-data2%>% 
+  ggplot( aes(log(PER), lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+score.plot<-data2%>% 
+  ggplot( aes(score, lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+TA.plot<-data2%>% 
+  ggplot( aes(TA, lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+logTA.plot<-data2%>% 
+  ggplot( aes(log(TA), lnreturn)) + geom_point(size=2) +
+  geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))
+
+grid.arrange(roa.plot,logroa.plot,per.plot,logper.plot,score.plot,TA.plot,logTA.plot,ncol=3)
+
+lm.score <- lm(lnreturn ~ ROA +log(ROA)+PER+log(PER)+TA+log(TA),data2)
+
+lm.score.step <- step(lm.score, direction = "both", trace = FALSE)
+
+score.star<-predict(lm.score.step)
+data2<-data2%>%mutate(score.star=score.star)
+
+score.star.plot<-ggplot(data2, aes(score.star, lnreturn)) + geom_point() + geom_smooth(method="lm", se=FALSE) + stat_regline_equation(formula = y~x, aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")))
+score.star.plot
+
+MSE1<-(sum((lm(lnreturn~(ROA),data2)$residual)^2))/48
+MSE2<-(sum((lm(lnreturn~log(ROA),data2)$residual)^2))/48
+MSE3<-(sum((lm(lnreturn~PER,data2)$residual)^2))/48
+MSE4<-(sum((lm(lnreturn~log(PER),data2)$residual)^2))/48
+MSE5<-(sum((lm(lnreturn~score,data2)$residual)^2))/48
+MSE6<-(sum((lm(lnreturn~TA,data2)$residual)^2))/48
+MSE7<-(sum((lm(lnreturn~log(TA),data2)$residual)^2))/48
+MSE8<-(sum((lm(lnreturn~score.star,data2)$residual)^2))/48
+
+kable(data.frame(Variable = c("ROA","log(ROA)","PER","log(PER)","score","TA","logTA","Score.star"), 
+                 MSE= round(c(MSE1,MSE2,MSE3,MSE4,MSE5,MSE6,MSE7,MSE8),3) ),align=c("rclcr")) %>% 
+  kable_styling(full_width=F)
+
+
+```
+
+### (d)
+```{r}
+lm.return <- lm(lnreturn ~ score.star, data=data2)
+pred=lm.return$fitted.values
+df2<-df%>%mutate(pred.rt=pred)%>%arrange(desc(pred.rt)) %>% mutate(m = seq(1,50,1),
+                                                                  rpt.pred = cumsum(return)/m)%>%select(rpt.pred, m )
+
+df%>% select(rpt,m) %>% merge(df2,by='m') %>%gather(key='method',value='return',rpt,rpt.pred) %>% 
+  ggplot(aes(m,return))+geom_line(aes(color=method))+
+  scale_color_manual(values=c("blue","red"),labels=c("Magic","score*"))+
+  ggtitle("수익률")
+
+kable(data.frame('intercept'=round(summary(lm.return)$coef[1],3),'slope'=round(summary(lm.return)$coef[2],3)))%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+
+# part3
+
+### data)  
+
+```{R}
+#월별 금리 it  
+data<- read_excel("CD유통수익률.xlsx")
+names(data) <- c("Date","it")
+
+#삼성전자/KTaG의 종가데이터
+samsung <- read.csv("samsung.csv")
+ktag <- read.csv("KTaG.csv")
+kakao <- read.csv("kakao.csv")
+naver <- read.csv("naver.csv")
+kogas <- read.csv("kogas.csv")
+
+samsung$Date <- format(as.Date(samsung$Date),format = "%Y/%m")
+ktag$Date <- format(as.Date(ktag$Date),format = "%Y/%m")
+kakao$Date <- format(as.Date(kakao$Date),format = "%Y/%m")
+naver$Date <- format(as.Date(naver$Date),format = "%Y/%m")
+kogas$Date <- format(as.Date(kogas$Date),format = "%Y/%m")
+
+samsung %>% select("Date","Close") -> samsung
+ktag %>% select("Date","Close") -> ktag
+kakao %>% select("Date","Close") -> kakao
+naver %>% select("Date","Close") -> naver
+kogas %>% select("Date","Close") -> kogas
+
+
+samsung %>% select("Date","Close") %>% merge(ktag,by = "Date",suffixes = c("_samsung","_kt")) %>% 
+  merge(kakao,by = "Date")  %>%
+  merge(naver,by = "Date",suffixes = c("_kakao","_naver")) %>%
+  merge(kogas,by = "Date") %>%
+  merge(data,by="Date") %>% arrange("Date") -> df
+df %>% rename('Close_gas' = 'Close') -> df
+
+
+df %>% mutate(t = seq(0,nrow(data1)-1,1),
+                 samsung = (Close_samsung-lag(Close_samsung))/lag(Close_samsung)  , 
+                 KTaG = (Close_kt-lag(Close_kt))/lag(Close_kt),
+                 kakao = (Close_kakao-lag(Close_kakao))/lag(Close_kakao),
+                 naver = (Close_naver-lag(Close_naver))/lag(Close_naver),
+                 gas = (Close_gas-lag(Close_gas))/lag(Close_gas),
+                 deposit = (it*0.01+1)^(1/12)-1 
+                 ) %>% na.omit()%>%
+  select(-it,-contains("Close"),-Date)%>% select(t,deposit,everything())-> data
+
+head(data)
+#write.csv(data,"portfolio.csv",row.names =FALSE)
+```
+
+
+
+### a) 
+
+```{r}
+data <- read.csv("portfolio.csv")#수익률 데이터 
+
+N<-5
+n<-12*N
+
+data[1:n,] -> train
+data[n+1:n,] -> test
+
+train <- data.matrix(train[-1])
+test <- data.matrix(test[-1])
+
+shape.ratio <- function(theta, r, i){ # input: theta, return, target return ratio
+    theta <- c( 1-sum(theta), theta) # theta0 = 1-sum(theta)
+    theta <- matrix(theta, nrow=nrow(r), ncol=length(theta), byrow = T)
+    rp <- rowSums(r*theta)
+    rp.bar <- mean(rp)
+    sp <- sd(rp)
+    r.star <- (1+i)^(1/12)-1
+    
+    return((rp.bar - r.star)/sp)
+} 
+
+cal.theta <- function(train, i, a=NULL, b=NULL){
+  j <- ncol(train)-1
+  ui <- rbind(rep(-1, j), diag(j)) # theta1, theta2, ...
+  ci <- c(-1, rep(0, j))
+  
+  # 추가 제약조건(a,b)
+  ui <- rbind(ui, a)
+  ci <- c(ci, b)
+  
+  # initial value
+  ci2 <- ci+0.1
+  theta0 <- c(MASS::ginv(ui)%*%ci2)
+  #print(theta0)
+  
+  # optim
+  res <- constrOptim(theta = theta0, f=shape.ratio, grad=NULL, ui=ui, ci=ci, r=train, i=i, control = list(fnscale = -1))
+  
+  return(res$par)
+  
+}
+
+
+outputs <- function(train,test,theta,i,v0=1){
+    
+    r.star <- (1+i)^(1/12)-1
+    
+    n1 <- nrow(train)
+    n2 <- nrow(test)
+    
+    theta <- c(1-sum(theta), theta) # theta0 = 1-sum(theta)
+    
+    mat1 <- matrix(theta, nrow=n1, ncol=length(theta), byrow = T)
+    mat2 <- matrix(theta, nrow=n2, ncol=length(theta), byrow = T)
+    
+    rpt<-rowSums(train*mat1)
+    rpt.star <- rowSums(test*mat2)
+    
+    rp.bar <-mean(rpt)
+    sp <-sd(rpt)
+    z<-(rp.bar-r.star)/sp
+    
+    ex.mean <- 12*rp.bar
+    ex.sd <- sqrt(12)*sp
+    
+    
+    real.mean <-mean(rpt.star)*12
+    real.sd <-sd(rpt.star)*sqrt(12)
+    
+    vt <- v0*cumprod(1+rpt)
+    vt.star <- v0*cumprod(1+rpt.star)
+    
+    result <- list(theta = theta,
+                   sharpe = z%>%round(3),
+                   month = c(rp.bar,sp)%>%round(3), 
+                   expected = c(ex.mean,ex.sd)%>%round(3),
+                   realized = c(real.mean,real.sd)%>%round(3),
+                   vt = data.frame(t = seq(1,60,1) ,vt=vt, vt.star = vt.star))
+    
+    return(result)
+} 
+
+
+
+i<-0.05
+theta<- cal.theta(train,i)
+theta%>%round(3)
+out <- outputs(train,test,theta,i,1)
+out 
+ggplot(out$vt)+geom_line(aes(x=t,y=vt.star))
+
+```
+### b 
+```{r}
+port.table<- data.frame(target = NA,deposit=NA,Samsung = NA, KTaG=NA,Kakao = NA,Naver =NA,GAS = NA,
+                        MEAN = NA, SD = NA, Sharpe =NA)
+
+j <- 1 
+for(i in seq(0.01,0.25,0.01)){
+  
+  theta<- cal.theta(train,i)
+  out <- outputs(train,test,theta,i,1)
+  
+  port.table[j,] <- round(c(i,out$theta[1],out$theta[2],out$theta[3],out$theta[4],out$theta[5],out$theta[6],
+                        out$expected[1],out$expected[2],out$sharpe),3)
+  j<-j+1
+}
+
+#write.csv(port.table,"port_final.csv",row.names = FALSE)
+kable(port.table,caption = "Optimal Portfolio Table")%>%kable_classic(full_width = F, html_font = "Cambria")
+
+
+#추가그래프 
+
+port.table[1:7] %>% mutate(target = as.character(target)) %>%
+  gather("stock","portfolio",deposit,Samsung,KTaG,Kakao,Naver,GAS) ->port 
+
+port %>% 
+  plot_ly() %>% 
+  add_trace(x = ~target, y = ~portfolio, color= ~stock,  type = "bar") %>% 
+  layout(
+    xaxis = list(title = "목표수익률"),
+    barmode = "stack"
+  )
+```
+
+
+### c) 
+
+```{r}
+
+port.table %>% mutate(AM = MEAN ,GM = AM-(SD^2)/2)%>%
+  gather(key="type","MEAN",AM,GM)-> df
+
+#Efficient Frontier 
+ggplot(df,aes(SD,MEAN,group=type,color=type)) + geom_point()+ geom_line(size=1)
+
+
+```
+
+### d)
+```{R}
+
+i<-0.05
+theta<- cal.theta(train,i)
+out <- outputs(train,test,theta,i,1)
+
+kable(data.frame(row.names = c("MEAN","SD"),expected = out$expected, realized = out$realized),
+      caption = "[part3-d]")%>%kable_classic(full_width = F, html_font = "Cambria")
+
+```
+
+비교 
+
+### e)
+```{R}
+
+out$vt %>% gather(key="vt","value",vt,vt.star)%>%ggplot()+geom_line(aes(x=t,y=value,color=vt),size=1)+
+  scale_color_manual(values=c("blue","red"),labels=c("train","Test"))
+
+```
+
+
+```{R}
+# 종가그래프 
+
+
+ggplot(samsung)+geom_line(aes(x=Date,y=Close,group=1))+
+  geom_vline(xintercept="2016/01", linetype = 'dotted', color='red', size = 1)+
+  scale_x_discrete(breaks = c("2011/01","2014/01","2017/01","2020/01"))+
+  ggtitle("삼성전자 종가")
+
+ggplot(kakao)+geom_line(aes(x=Date,y=Close,group=1))+
+  geom_vline(xintercept="2016/01", linetype = 'dotted', color='red', size = 1)+
+  scale_x_discrete(breaks = c("2011/01","2014/01","2017/01","2020/01"))+
+  ggtitle("카카오 종가")
+
+ggplot(naver)+geom_line(aes(x=Date,y=Close,group=1))+
+  geom_vline(xintercept="2016/01", linetype = 'dotted', color='red', size = 1)+
+  scale_x_discrete(breaks = c("2011/01","2014/01","2017/01","2020/01"))+
+  ggtitle("네이버 종가")
+
+
+```
+
+

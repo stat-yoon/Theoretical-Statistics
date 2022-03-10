@@ -1,0 +1,413 @@
+---
+title: "HW9_Survival_Analysis"
+author: "Group1"
+date: '2021 11 22'
+output: 
+  html_document: 
+    theme: paper
+    toc: yes
+    toc_float: yes
+    df_print: paged
+---
+
+```{r include=FALSE}
+#setwd("C:/Users/qkrwl/Desktop/2021-2/이통2/HW/hw9/")
+library(readxl)
+library(tidyverse)
+library(gridExtra)
+library(GGally)
+library(survival)
+library(survminer)
+library(gtsummary)
+library(MASS)
+library(fastDummies)
+library(ggfortify)
+```
+
+```{r}
+data <- read_xls("Framingham.xls")
+data$sex <- as.factor(data$sex)
+data$month <- as.factor(data$month)
+head(data)
+na.ind <- which(!complete.cases(data))
+data <- data[,-1]
+```
+
+# PART I. Cox
+
+```{r}
+data2 <- data[-na.ind,]
+```
+
+```{r}
+# ggpairs(data2)
+
+# par(mfrow=c(1,2))
+# for(i in 1:5){
+#   hist(data2[,i], xlab = "", main=colnames(data2)[i])
+#   hist(log(data2[,i]), xlab = "", main=paste0("log(",colnames(data2)[i],")"))
+# }
+
+data.t <- data2
+
+# log 변환
+data.t$sbp <- log(data.t$sbp)
+data.t$bmi <- log(data.t$bmi)
+data.t$dbp <- log(data.t$dbp)
+data.t$scl <- log(data.t$scl)
+
+# age 그룹화
+data.t$age <- as.factor(floor(data.t$age/10)*10)
+
+
+# centering
+col.mean.t <- colMeans(data.t[,c(1:3,5)])
+col.mean.t
+data.t[,c(1:3,5)] <- scale(data.t[,c(1:3,5)], center = TRUE, scale = FALSE)
+
+half <- list()
+col <- c(1:3,5)
+for(i in 1:4){
+  half[[i]] <- gghalfnorm::gghalfnorm(data.t[[col[i]]], nlab = 3, repel = T)
+}
+grid.arrange(grobs=half, ncol=2)
+
+out <- c(3360, 956, 1225, 1906, 3329, 3435, 612) 
+```
+
+## (a)
+```{r message=FALSE, warning=FALSE}
+data.t <- data2[-out,]
+
+# log 변환
+data.t$sbp <- log(data.t$sbp)
+data.t$bmi <- log(data.t$bmi)
+data.t$dbp <- log(data.t$dbp)
+data.t$scl <- log(data.t$scl)
+
+# age 그룹화
+data.t$age <- as.factor(floor(data.t$age/10)*10)
+
+
+# centering
+col.mean.t <- colMeans(data.t[,c(1:3,5)])
+col.mean.t
+data.t[,c(1:3,5)] <- scale(data.t[,c(1:3,5)], center = TRUE, scale = FALSE)
+
+cox.t <- coxph(Surv(followup, chdfate)~., data = data.t)
+cox.t.step <-stepAIC(cox.t,direction = "both", trace = 0)
+
+# intercation
+cox.t2 <- coxph(Surv(followup, chdfate)~.*., data = data.t)
+cox.t2.step <-stepAIC(cox.t2,direction = "both", trace = 0)
+
+data.frame('simple'=extractAIC(cox.t), 'simplt_step'=extractAIC(cox.t.step), 
+           'interaction'=extractAIC(cox.t2), 'interaction_step'=extractAIC(cox.t2.step),
+           row.names=c('var_num', 'AIC'))
+
+ggforest(cox.t2.step, data.t)
+ggsurvplot(survfit(cox.t2.step), data=data.t, conf.int = FALSE)
+cox.t2.step %>% tbl_regression() %>% plot()
+```
+
+coxph(formula = Surv(followup, chdfate) ~ sbp + dbp + scl + age + 
+    bmi + sex + sbp:dbp + sbp:scl + sbp:age + dbp:scl + dbp:age + 
+    dbp:bmi + scl:age, data = data.t)
+
+```{r eval=FALSE, include=FALSE}
+# log 변환 x
+# centering
+col.mean <- colMeans(data2[-na.ind,1:5])
+col.mean
+data.s <- data2[-na.ind,]
+data.s[,1:5] <- scale(data.s[,1:5], center = TRUE, scale = FALSE)
+
+
+cox.s <- coxph(Surv(followup, chdfate)~., data = data.s)
+extractAIC(cox.s)
+
+cox.s.step <-step(cox.s,direction = "both", trace = 0)
+extractAIC(cox.s.step)
+# ggforest(cox.s.step, data = data.s)
+# ggsurvplot(survfit(cox.s.step), data=data.s, conf.int = FALSE)
+
+# intercation
+cox.s2 <- coxph(Surv(followup, chdfate)~.*., data = data.s)
+extractAIC(cox.s2)
+
+cox.s2.step <-step(cox.s2,direction = "both", trace = 0)
+extractAIC(cox.s2.step)
+
+ggforest(cox.s2.step, data = data.s)
+ggsurvplot(survfit(cox.s2.step), data=data.s)
+summary(cox.s2.step)
+```
+
+## (b)
+```{r message=FALSE, warning=FALSE}
+par(mfrow=c(1,2))
+ggsurvplot(survfit(cox.t2.step), data=data.t, conf.int = FALSE)
+ggsurvplot(survfit(cox.t2.step), fun="cumhaz", data=data.t, conf.int = FALSE, palette = "skyblue3")
+```
+
+```{r message=FALSE, warning=FALSE}
+S <- basehaz(cox.t2.step)
+
+par(mfrow=c(1,2))
+with(S, plot(time, log(hazard), main="Gompertz"))
+with(S, plot(log(time), log(hazard), main="Weibull"))
+```
+
+## (c)
+```{r message=FALSE, warning=FALSE}
+cox.t2.step %>% tbl_regression(exponentiate=T) %>% plot()
+autoplot(aareg(cox.t2.step$formula, data.t), ncol=4, scales="free")
+```
+
+# PART II. ALT
+## a)
+```{r warning = FALSE, message = FALSE}
+#weibull
+alt.w <- survreg(Surv(followup,chdfate)~., data = data.t, dist = 'weibull')
+alt.w.i <- survreg(Surv(followup,chdfate)~.*., data = data.t, dist = 'weibull')
+
+alt.w.step <-step(alt.w,trace=F)
+alt.w.i.step <-step(alt.w.i,trace=F)
+
+#loglogistic
+alt.l <- survreg(Surv(followup,chdfate )~., data = data.t, dist = 'loglogistic')
+alt.l.i <- survreg(Surv(followup,chdfate)~.*., data = data.t, dist = 'loglogistic')
+
+alt.l.step<-step(alt.l,trace=F)
+alt.l.i.step<-step(alt.l.i,trace=F)
+
+#lognormal
+alt.ln <- survreg(Surv(followup,chdfate )~., data = data.t, dist = 'lognormal')
+alt.ln.i <- survreg(Surv(followup,chdfate)~.*., data = data.t, dist = 'lognormal')
+
+alt.ln.step<-step(alt.ln,trace=F)
+alt.ln.i.step<-step(alt.ln.i,trace=F)
+
+#logistic
+alt.log <- survreg(Surv(followup,chdfate )~., data = data.t, dist = 'logistic')
+alt.log.i <- survreg(Surv(followup,chdfate )~.*., data = data.t, dist = 'logistic')
+
+alt.log.step<-step(alt.log,trace=F)
+alt.log.i.step<-step(alt.log.i,trace=F)
+
+
+aic.w<-rbind(simple=extractAIC(alt.w),interction=extractAIC(alt.w.i),
+             simple.step=extractAIC(alt.w.step),
+             interaction.step=extractAIC(alt.w.i.step))
+
+aic.l<-rbind(simple=extractAIC(alt.l),interction=extractAIC(alt.l.i),
+             simple.step=extractAIC(alt.l.step),
+             interaction.step=extractAIC(alt.l.i.step))
+
+aic.ln<-rbind(simple=extractAIC(alt.ln),interction=extractAIC(alt.ln.i),
+              simple.step=extractAIC(alt.ln.step),
+              interaction.step=extractAIC(alt.ln.i.step))
+
+aic.log<-rbind(simple=extractAIC(alt.log),interction=extractAIC(alt.log.i),
+               simple.step=extractAIC(alt.log.step),
+               interaction.step=extractAIC(alt.log.i.step))
+
+aic<-cbind(aic.w,aic.l,aic.ln,aic.log)
+colnames(aic) <- c('no', 'weibull', 'no', 'loglogistic',
+                   'no', 'lognormal', 'no', 'logistic')
+aic <- data.frame(aic)
+aic 
+
+# Weibull & interaction term 
+# best : alt.w.i.step
+
+alt<-alt.w.i.step
+summary(alt)
+extractAIC(alt)
+
+sigma <- alt$scale
+mu <- predict(alt,type = "lp")
+
+alt.data <- data.frame(u = (log(data.t$followup)-mu)/sigma) %>% mutate(r = rank(u), p = r/(length(data.t$followup)+1), weibull =  log(-log(1-p))) 
+ggplot(alt.data, aes(weibull, u)) + geom_point() + geom_smooth(method='lm', se = F) + ggtitle('Weibull Q-Q plot')
+```
+
+Weibull을 최적 모형으로 선택함. 
+
+survreg(formula = Surv(followup, chdfate) ~ age + sex + log_scl + 
+    log_sbp + log_bmi + log_dbp + age:sex + age:log_sbp + age:log_dbp + 
+    log_scl:log_sbp + log_scl:log_dbp + log_sbp:log_dbp + log_bmi:log_dbp, 
+    data = df, dist = "weibull")
+
+## b)
+```{r warning = FALSE, message = FALSE}
+alt.w.i.step %>% tbl_regression() %>% plot()
+
+alt_form <- survreg(formula = Surv(followup, chdfate) ~ sbp + dbp + scl + 
+    age + bmi + sex + sbp:dbp + sbp:scl + sbp:age + dbp:scl + 
+    dbp:age + dbp:bmi + scl:age, data = data.t, dist = "weibull")
+
+autoplot(aareg(alt_form, data.t), ncol=4, scales="free")
+```
+
+# PART3
+## (a) & (b)
+```{r message=FALSE, warning=FALSE}
+# cox
+summary(survfit(cox.t2.step), time=3650)
+
+lm <- lm(log(hazard)~log(time), data = S)
+alpha <- summary(lm)$coefficients[1]
+beta <- summary(lm)$coefficients[2]
+
+mu.cox <- predict(cox.t2.step, data.t, type = 'risk')
+p.cox <- 1-exp(-exp((alpha+beta*(log(3650))))*mu.cox)
+cox_hist <- hist(p.cox, breaks = 20, xlab="Cox PHM", main="Histogram of Probability (10years)")
+
+# alt
+u <- (log(3650)-mu)/sigma
+prob_alt <- (1-exp(-exp(u)))
+alt_hist <- hist(prob_alt, breaks = 20, xlab="ALT", main="Histogram of Probability (10years)")
+
+# plot
+plot(p.cox, prob_alt, main='Probability of Cox vs ALT', xlab='COX', ylab='ALT')
+
+plot(density(prob_alt), col='skyblue', lwd=2, main='Density Probability of Cox vs ALT')
+lines(density(p.cox), col='lightsalmon', lwd=2)
+legend("topright", legend = c("ALT", "COX"), col=c("skyblue","lightsalmon"), lwd=2, inset=0.05)
+```
+
+## (c)
+```{r message=FALSE, warning=FALSE}
+data.frame('Cox' = extractAIC(cox.t2.step), 'ALT' = extractAIC(alt.w.i.step),
+           row.names = c('var.num', 'AIC'))
+```
+
+# PART4
+### cox
+```{r message=FALSE, warning=FALSE}
+data.new <- data2[-out,] %>% mutate(t.star = age*365.25+followup) %>% dplyr::select(-followup, -age)
+data.new[,1:4] <- scale(data.new[,1:4], center = TRUE, scale = FALSE)
+
+cox.new <- coxph(Surv(t.star, chdfate)~., data = data.new)
+cox.new.step <-step(cox.new,direction = "both", trace = 0)
+
+# intercation
+cox.new2 <- coxph(Surv(t.star, chdfate)~.*., data = data.new)
+cox.new2.step <-step(cox.new2,direction = "both", trace = 0)
+
+cox.new2.step %>% tbl_regression(exponentiate=T) %>% plot()
+ggsurvplot(survfit(cox.new2.step), data=data.new)
+ggsurvplot(survfit(cox.new2.step), data=data.new, fun = "cumhaz", palette="skyblue3")
+#summary(cox.new2.step)
+
+ggsurvplot(survfit(cox.new2.step), data=data.new)
+
+data.frame('simple'=extractAIC(cox.new), 'simple_step'=extractAIC(cox.new.step), 
+           'interaction' = extractAIC(cox.new2), 'interaction_step' = extractAIC(cox.new2.step),
+           row.names=c('var_num', 'AIC'))
+
+# H(t), S(t)
+S2 <- data.frame(time = survfit(cox.new2.step)$time, surv = survfit(cox.new2.step)$surv, hazard = -log(survfit(cox.new2.step)$surv))
+
+par(mfrow=c(1,2))
+with(S2, plot(time, log(hazard), main="Gompertz"))
+with(S2, plot(log(time), log(hazard), main="Weibull"))
+```
+
+```{r}
+# probability 예측
+lm2 <- lm(log(hazard)~log(time), data = S2[-(1:7),])
+alpha2 <- summary(lm2)$coefficients[1]
+beta2 <- summary(lm2)$coefficients[2]
+
+mu.cox2 <- predict(cox.new2.step, data.new, type = 'risk')
+t <- data2$age[-out]*365.25+3650
+p.cox2 <- 1-exp(-exp((alpha2+beta2*log(t)))*mu.cox2)
+
+# plot
+hist(p.cox2, breaks = 30,  xlab="age x 365.25 + followup", main="Histogram of COX Probability (10years)")
+
+plot(density(p.cox2), col="skyblue", lwd=2, main="Probability Comparing of COX", xlab="")
+lines(density(p.cox), col="lightsalmon", lwd=2)
+legend("topright", legend = c("age x 365.25 + followup", "followup"), col=c("skyblue","lightsalmon"), lwd=2, inset=0.05)
+
+plot(p.cox, p.cox2, xlab="followup", ylab="age x 365.25 + followup", main="Probability Comparing of COX")
+abline(0,1, col="blue", lty=2)
+```
+
+### alt
+```{r warning = FALSE, message = FALSE}
+#weibull
+alt.w <- survreg(Surv(t.star,chdfate)~., data = data.new, dist = 'weibull')
+alt.w.i <- survreg(Surv(t.star,chdfate)~.*., data = data.new, dist = 'weibull')
+
+alt.w.step<-step(alt.w,trace=F)
+alt.w.i.step<-step(alt.w.i,trace=F)
+
+#loglogistic
+alt.l <- survreg(Surv(t.star,chdfate )~., data = data.new, dist = 'loglogistic')
+alt.l.i <- survreg(Surv(t.star,chdfate)~.*., data = data.new, dist = 'loglogistic')
+
+alt.l.step<-step(alt.l,trace=F)
+alt.l.i.step<-step(alt.l.i,trace=F)
+
+#lognormal
+alt.ln <- survreg(Surv(t.star,chdfate )~., data = data.new, dist = 'lognormal')
+alt.ln.i <- survreg(Surv(t.star,chdfate)~.*., data = data.new, dist = 'lognormal')
+
+alt.ln.step<-step(alt.ln,trace=F)
+alt.ln.i.step<-step(alt.ln.i,trace=F)
+
+
+#logistic
+alt.log <- survreg(Surv(t.star,chdfate )~., data = data.new, dist = 'logistic')
+alt.log.i <- survreg(Surv(t.star,chdfate )~.*., data = data.new, dist = 'logistic')
+
+alt.log.step<-step(alt.log,trace=F)
+alt.log.i.step<-step(alt.log.i,trace=F)
+
+
+aic.w<-rbind(simple=AIC(alt.w),interction=AIC(alt.w.i),
+             simple.step=AIC(alt.w.step),interaction.step=AIC(alt.w.i.step))
+
+aic.l<-rbind(simple=AIC(alt.l),interction=AIC(alt.l.i),
+             simple.step=AIC(alt.l.step),interaction.step=AIC(alt.l.i.step))
+
+aic.ln<-rbind(simple=AIC(alt.ln),interction=AIC(alt.ln.i),
+              simple.step=AIC(alt.ln.step),interaction.step=AIC(alt.ln.i.step))
+
+aic.log<-rbind(simple=AIC(alt.log),interction=AIC(alt.log.i),
+               simple.step=AIC(alt.log.step),interaction.step=AIC(alt.log.i.step))
+
+aic<-cbind(aic.w,aic.l,aic.ln,aic.log)
+colnames(aic) <- c('weibull','loglogistic','lognormal','logistic')
+aic <- data.frame(aic)
+aic
+
+# lognormal  & interaction term
+# best : alt.ln.i.step
+
+alt2<-alt.ln.i.step
+
+sigma2 <- alt2$scale
+mu2 <- predict(alt2,type = "lp")
+
+alt.data2 <- data.frame(u =(log(data.new$t.star)-mu2)/sigma2) %>%
+  mutate(r = rank(u), p = r/(length(data.new$t.star)+1), lognormal = qnorm(p))
+ggplot(alt.data2, aes(lognormal, u)) + geom_point() + geom_smooth(method='lm', se = F) + ggtitle('lognormal Q-Q plot')
+
+u2 <- (log(t)-mu2)/sigma2
+prob_alt2 <- pnorm(u2)
+
+# plot
+hist(prob_alt2, breaks = 30,  xlab="age x 365.25 + followup", main="Histogram of ALT Probability (10years)")
+
+plot(density(prob_alt2), col="skyblue", lwd=2, main="Probability Comparing of ALT", xlab="")
+lines(density(prob_alt), col="lightsalmon", lwd=2)
+legend("topright", legend = c("age x 365.25 + followup", "followup"), col=c("skyblue","lightsalmon"), lwd=2, inset=0.05)
+
+plot(prob_alt,prob_alt2, xlab="followup", ylab="age x 365.25 + followup", main="Probability Comparing of ALT")
+abline(0,1, col="blue", lty=2)
+```
+

@@ -1,0 +1,507 @@
+---
+title: "COVID19 사망자"
+output: html_document
+---
+
+```{r include=FALSE}
+library(tidyverse)
+library(gridExtra)
+```
+
+# 1) 영국의 일별 Covid-19 사망자 수 (2020.3.7 ~ 2020.8.31)
+```{r}
+# 데이터 불러오기
+covid <- read.csv("owid-covid-data.csv")
+covid$date <- as.Date(covid$date)
+
+# 전체 코로나 데이터 줄 영국(GBR)의 일별 사망자 추출
+date_range <- seq(as.Date("2020-03-07"), as.Date("2020-08-31"), by="day")
+covid_uk <- covid %>% filter(iso_code=="GBR" & date %in% date_range) %>% select("date","new_deaths_smoothed") 
+colnames(covid_uk)[2] <- c("St")
+```
+
+### (a) 시계열 도표
+```{r fig.height=8}
+covid_uk["Yt"] <- cumsum(covid_uk["St"])
+
+s.plot <- ggplot(covid_uk)+geom_line(aes(x=date, y=St))+ggtitle("Daily new confirmed COVID-19 deaths in UK")+ylab("St")+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+
+y.plot <- ggplot(covid_uk)+geom_line(aes(x=date, y=Yt))+ggtitle("Total deaths attributed to COVID-19 in UK")+ylab("Yt")+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+
+grid.arrange(s.plot, y.plot)
+```
+
+
+### (b) 최초 사망자가 발생한 날부터 초기 n일까지 데이터를 이용하여 영국 내 총 감염자수 추정
+
+```{r}
+bass.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]; c <- coef[[3]]
+  m <- (-b-sqrt(b^2-4*a*c))/(2*c)
+  p <- a/m
+  q <- -c*m
+  return(list(p=p, q=q, m=m))
+}
+
+logit.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]
+  q <- a
+  m <- -a/b
+  return(list(q=q, m=m))
+}
+
+gumbel.coef <- function(coef){
+  a <- coef[[1]]; b <- coef[[2]]
+  q <- -b
+  m <- exp(-a/b)
+  return(list(q=q, m=m))
+}
+
+covid_uk["Yt_lag"] <- lag(covid_uk$Yt, default = 0) # Y(t-1)
+res_ols <- data.frame(n=rep(c(20,30,50),rep(3,3)), model=rep(c("bass","logit","gumbel"),3), p=NA, q=NA, m=NA)
+
+# n =20 
+n = 20
+covid_uk20 <- covid_uk[1:n,]
+
+# 1. Bass model
+bass20 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_uk20)
+summary(bass20) 
+## c>0임으로 bass 추정 올바르지 않음
+res_ols[1,3:5] <- bass.coef(bass20$coefficients)
+
+
+# 2. Logistic model
+logit20 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_uk20)
+summary(logit20)
+res_ols[2,4:5] <- logit.coef(logit20$coefficients)
+
+
+# 3. Gumbel model
+gum20 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_uk20[2:20,])
+summary(gum20)
+res_ols[3,4:5] <- gumbel.coef(gum20$coefficients)
+
+
+
+# n=30
+n = 30
+covid_uk30 <- covid_uk[1:n,]
+
+# 1. Bass model
+bass30 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_uk30)
+summary(bass30) 
+res_ols[4,3:5] <- bass.coef(bass30$coefficients)
+
+# 2. Logistic model
+logit30 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_uk30)
+summary(logit30)
+res_ols[5,4:5] <- logit.coef(logit30$coefficients)
+
+
+# 3. Gumbel model
+gum30 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_uk30[2:30,])
+summary(gum30)
+res_ols[6,4:5] <- gumbel.coef(gum30$coefficients)
+
+
+
+
+
+
+# n=50
+n = 50
+covid_uk50 <- covid_uk[1:n,]
+
+# 1. Bass model
+bass50 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_uk50)
+summary(bass50) 
+res_ols[7,3:5] <- bass.coef(bass50$coefficients)
+
+
+# 2. Logistic model
+logit50 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_uk50)
+summary(logit50)
+res_ols[8,4:5] <- logit.coef(logit50$coefficients)
+
+
+# 3. Gumbel model
+gum50 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_uk50[2:50,])
+summary(gum50)
+res_ols[9,4:5] <- gumbel.coef(gum50$coefficients)
+
+
+
+res_ols["m_real"] <- covid_uk[nrow(covid_uk),"Yt"]
+res_ols <- res_ols %>% mutate(e=100*(m-m_real)/m_real)
+res_ols[,3:7] <- round(res_ols[,3:7],3)
+res_ols
+```
+
+
+
+
+
+#### 최적 모형
+```{r warning=FALSE, message=FALSE}
+res_ols[c("n","model","e")]
+
+pred <- data.frame(real=covid_uk$St, bass=predict(bass50, covid_uk["Yt_lag"]))
+pred[pred$bass<0,"bass"] <- 0
+pred <- cbind(pred, logit = predict(logit50, covid_uk["Yt_lag"]))
+pred[pred$logit<0,"logit"] <- 0
+pred <- cbind(pred, gum=predict(gum50, covid_uk["Yt_lag"]))
+pred[!is.na(pred$gum)&(pred$gum<0),"gum"] <- 0
+pred_s <- cbind(date=covid_uk$date, stack(pred))
+
+ggplot(pred_s)+geom_line(aes(x=date, y=values, col=ind),lwd=1)+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+
+pred_y <- data.frame(apply(pred[,1:3], 2, cumsum))
+pred_y["gum"] <- c(NA,cumsum(pred$gum[-1]))
+pred_y <- cbind(date=covid_uk$date, stack(pred_y))
+ggplot(pred_y)+geom_line(aes(x=date, y=values, col=ind),lwd=1)+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+
+
+df1 <- data.frame(model=rep("bass",nrow(covid_uk)), s=covid_uk$St[1], y=covid_uk$St[1])
+for(i in 2:nrow(covid_uk)){
+    df1[i,"s"] <- predict(bass50, data.frame(Yt_lag=df1[i-1,"y"]))
+    df1[i,"y"] <- sum(df1[1:i,"s"])
+}
+
+
+df2 <- data.frame(model=rep("logistic",nrow(covid_uk)),  s=covid_uk$St[1], y=covid_uk$St[1])
+for(i in 2:nrow(covid_uk)){
+    df2[i,"s"] <- predict(logit50, data.frame(Yt_lag=df2[i-1,"y"]))
+    df2[i,"y"] <- sum(df2[1:i,"s"])
+}
+
+df3 <- data.frame(model=rep("gumbel",nrow(covid_uk)),  s=covid_uk$St[1], y=covid_uk$St[1])
+for(i in 2:nrow(covid_uk)){
+    df3[i,"s"] <- predict(gum50, data.frame(Yt_lag=df3[i-1,"y"]))
+    df3[i,"y"] <- sum(df3[1:i,"s"])
+}
+
+
+df_all <- rbind(df1,df2,df3)
+df_all <- cbind(date=covid_uk$date, df_all)
+ggplot(df_all)+geom_line(aes(x=date, y=s, col=model),lwd=1)+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+```
+
+
+#### 다양한 추정 방법 
+- n =50
+- Gumbel model  
+
+##### Q-Q plot
+```{r warning=FALSE, message=FALSE}
+covid_uk <- covid_uk %>% mutate(r=round(Yt), t=order(date))
+
+qqplot.gum <- function(x,r,m){
+  u <- r/(m+1)
+  g <- -log(-log(u))
+  fit <- lm(x~g)
+  return(summary(fit)$r.squared)
+}
+
+
+Xr <- covid_uk$t[2:50]
+r <- covid_uk$r[2:50]
+r2 <- c()
+m <- seq(30000,70000,500)
+for(i in m){
+  r2 <- c(r2,qqplot.gum(Xr, r, i))
+}
+
+
+m.qq <- m[which.max(r2)]
+m.qq
+
+
+df.qq <- data.frame(Xr,r) %>% mutate(u=r/(m.qq+1), g=-log(-log(u)))
+ggplot(df.qq, aes(x=g, y=Xr))+geom_point(na.rm = TRUE)+geom_smooth(method="lm", se=F, na.rm = T)+ggtitle("Gumbel Q-Q plot", subtitle = paste("m =",m.qq))
+
+
+fit.qq <- lm(Xr ~ g, data=df.qq)
+res_qq <- data.frame(mu=fit.qq$coefficients[[1]], sigma =fit.qq$coefficients[[2]], q=1/fit.qq$coefficients[[2]], m=m.qq)
+round(res_qq,3)
+```
+  
+
+##### NLSE
+```{r}
+covid_uk["Yt_mul"] <- covid_uk$Yt_lag*log(covid_uk$Yt_lag)
+
+# 초기값 = Q-Q plot 추정치
+nls.fit <- nls(St ~ q*log(m)*Yt_lag - q*Yt_mul, data=covid_uk[1:50,], start = list(m=res_qq$m, q=res_qq$q))
+summary(nls.fit)
+
+nls.fit2 <- nls(Xr ~ mu+sigma*(-log(-log(r/(m+1)))), data=df.qq[1:50,], start = list(mu=res_qq$mu, sigma=res_qq$sigma, m=res_qq$m))
+summary(nls.fit2)
+
+# 초기값 = OLS 추정치
+nls.fit3 <- nls(St ~ q*log(m)*Yt_lag - q*Yt_mul, data=covid_uk[1:50,], start = list(m=res_ols$m[9], q=res_ols$q[9]))
+summary(nls.fit3)
+
+nls.fit4 <- nls(Xr ~ mu+sigma*(-log(-log(r/(m+1)))), data=df.qq[1:50,], start = list(mu=which.max(pred$gum), sigma=1/res_ols[9,4], m=res_ols[9,5]))
+summary(nls.fit4)
+
+
+## 두 경우 결과값 동일
+res_nls1 <- rbind(summary(nls.fit)$coef[,1], summary(nls.fit3)$coef[,1])
+res_nls2 <- rbind(summary(nls.fit2)$coef[,1], summary(nls.fit4)$coef[,1])
+round(res_nls1,3)
+round(res_nls2,3)
+```
+
+
+
+##### MLE
+```{r}
+loglik <-function(par){
+  m<-par[1]; mu<-par[2]; sigma<-par[3]
+  data <- covid_uk[1:50,c("St","t")]
+  
+  data["Ft"] <- exp(-exp(-(data$t-mu)/sigma))
+  
+  data[2:50,"prob"] <- diff(data$Ft)
+  data[1,"prob"] <- data[1,"Ft"]- exp(-exp(-(0-mu)/sigma))
+  
+  data[51,"prob"] <- 1 - data[50,"Ft"]
+  data[51,"St"] <- m - sum(data$St[1:50])
+  
+  data <- data %>% mutate(v1 = lfactorial(St) , v2 = St*log(prob))
+  # return(data)
+  
+  loglik <- lfactorial(m) - sum(data$v1) + sum(data$v2)
+  return(-loglik)
+}
+
+# initial value =  Q-Q plot estimator
+mle <- optim(par=c(res_qq[c(4,1,2)]), loglik, hessian=T, method= "BFGS")
+res_mle <- mle$par
+round(res_mle,3)
+```
+
+
+
+# 2) 이탈리아의 일별 Covid-19 사망자 수 
+```{r}
+# 전체 코로나 데이터 중 이탈리아의 일별 사망자 추출
+covid_it <- covid %>% filter(iso_code=="ITA" & new_deaths_smoothed >0 & date<as.Date("2020-08-31")) %>% select("date","new_deaths_smoothed") 
+colnames(covid_it)[2] <- c("St")
+```
+
+### (a) 시계열 도표
+```{r fig.height=8}
+covid_it["Yt"] <- cumsum(covid_it["St"])
+
+s.plot <- ggplot(covid_it)+geom_line(aes(x=date, y=St))+ggtitle("Daily new confirmed COVID-19 deaths in Italy")+ylab("St")+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+
+y.plot <- ggplot(covid_it)+geom_line(aes(x=date, y=Yt))+ggtitle("Total deaths attributed to COVID-19 in Italy")+ylab("Yt")+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+grid.arrange(s.plot, y.plot)
+```
+
+
+### (b) 최초 사망자가 발생한 날부터 초기 n일까지 데이터를 이용하여 이탈리아 내 총 감염자수 추정
+
+
+```{r}
+covid_it["Yt_lag"] <- lag(covid_it$Yt, default = 0) # Y(t-1)
+res_ols_it <- data.frame(n=rep(c(20,30,50),rep(3,3)), model=rep(c("bass","logit","gumbel"),3), p=NA, q=NA, m=NA)
+
+# n =20 
+n = 20
+covid_it20 <- covid_it[1:n,]
+
+# 1. Bass model
+bass20 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_it20)
+summary(bass20) 
+## c>0임으로 bass 추정 올바르지 않음
+res_ols_it[1,3:5] <- bass.coef(bass20$coefficients)
+
+
+# 2. Logistic model
+logit20 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_it20)
+summary(logit20)
+res_ols_it[2,4:5] <- logit.coef(logit20$coefficients)
+
+
+# 3. Gumbel model
+gum20 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_it20[-1,])
+summary(gum20)
+res_ols_it[3,4:5] <- gumbel.coef(gum20$coefficients)
+
+
+
+# n=30
+n = 30
+covid_it30 <- covid_it[1:n,]
+
+# 1. Bass model
+bass30 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_it30)
+summary(bass30) 
+res_ols_it[4,3:5] <- bass.coef(bass30$coefficients)
+
+# 2. Logistic model
+logit30 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_it30)
+summary(logit30)
+res_ols_it[5,4:5] <- logit.coef(logit30$coefficients)
+
+
+# 3. Gumbel model
+gum30 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_it30[-1,])
+summary(gum30)
+res_ols_it[6,4:5] <- gumbel.coef(gum30$coefficients)
+
+
+
+
+
+# n=50
+n = 50
+covid_it50 <- covid_it[1:n,]
+
+# 1. Bass model
+bass50 <- lm(St ~ Yt_lag + I(Yt_lag^2), data=covid_it50)
+summary(bass50) 
+res_ols_it[7,3:5] <- bass.coef(bass50$coefficients)
+
+
+# 2. Logistic model
+logit50 <- lm(St ~ Yt_lag + I(Yt_lag^2) -1, data=covid_it50)
+summary(logit50)
+res_ols_it[8,4:5] <- logit.coef(logit50$coefficients)
+
+
+# 3. Gumbel model
+gum50 <- lm(St ~ Yt_lag + Yt_lag:log(Yt_lag)-1, data=covid_it50[-1,])
+summary(gum50)
+res_ols_it[9,4:5] <- gumbel.coef(gum50$coefficients)
+
+
+
+res_ols_it["m_real"] <- covid_it[nrow(covid_it),"Yt"]
+res_ols_it <- res_ols_it %>% mutate(e=100*(m-m_real)/m_real)
+res_ols_it[,3:7] <- round(res_ols_it[,3:7],3)
+res_ols_it
+```
+
+
+
+
+#### 최적 모형
+```{r warning=FALSE, message=FALSE}
+res_ols_it[c("n","model","e")]
+
+pred <- data.frame(real=covid_it$St, bass=predict(bass50, covid_it["Yt_lag"]))
+pred[pred$bass<0,"bass"] <- 0
+pred <- cbind(pred, logit = predict(logit50, covid_it["Yt_lag"]))
+pred[pred$logit<0,"logit"] <- 0
+pred <- cbind(pred, gum=predict(gum50, covid_it["Yt_lag"]))
+pred[!is.na(pred$gum)&(pred$gum<0),"gum"] <- 0
+pred_s <- cbind(date=covid_it$date, stack(pred))
+
+ggplot(pred_s)+geom_line(aes(x=date, y=values, col=ind),lwd=1)+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+
+pred_y <- data.frame(apply(pred[,1:3], 2, cumsum))
+pred_y["gum"] <- c(NA,cumsum(pred$gum[-1]))
+pred_y <- cbind(date=covid_it$date, stack(pred_y))
+ggplot(pred_y)+geom_line(aes(x=date, y=values, col=ind),lwd=1)+scale_x_date(date_breaks = "month", date_labels = "%Y-%m-%d")
+```
+
+
+
+#### 다양한 추정 방법
+
+- n =50
+- Gumbel model  
+
+##### Q-Q plot
+```{r warning=FALSE, message=FALSE}
+covid_it <- covid_it %>% mutate(r=round(Yt), t=order(date))
+
+qqplot.gum <- function(x,r,m){
+  u <- r/(m+1)
+  g <- -log(-log(u))
+  fit <- lm(x~g)
+  return(summary(fit)$r.squared)
+}
+
+
+Xr <- covid_it$t[3:50] #0값 제외
+r <- covid_it$r[3:50]
+r2 <- c()
+m <- seq(30000,70000,500)
+for(i in m){
+  r2 <- c(r2,qqplot.gum(Xr, r, i))
+}
+
+
+m.qq <- m[which.max(r2)]
+m.qq
+
+
+df.qq <- data.frame(Xr,r) %>% mutate(u=r/(m.qq+1), g=-log(-log(u)))
+ggplot(df.qq, aes(x=g, y=Xr))+geom_point(na.rm = TRUE)+geom_smooth(method="lm", se=F, na.rm = T)+ggtitle("Gumbel Q-Q plot", subtitle = paste("m =",m.qq))
+
+
+fit.qq <- lm(Xr ~ g, data=df.qq)
+res_qq_it <- data.frame(mu=fit.qq$coefficients[[1]], sigma =fit.qq$coefficients[[2]], q=1/fit.qq$coefficients[[2]], m=m.qq)
+round(res_qq_it,3)
+```
+  
+
+##### NLSE
+```{r}
+covid_it["Yt_mul"] <- covid_it$Yt_lag*log(covid_it$Yt_lag)
+
+# 초기값 = Q-Q plot 추정치
+nls.fit <- nls(St ~ q*log(m)*Yt_lag - q*Yt_mul, data=covid_it[1:50,], start = list(m=res_qq_it$m, q=res_qq_it$q))
+summary(nls.fit)
+
+nls.fit2 <- nls(Xr ~ mu+sigma*(-log(-log(r/(m+1)))), data=df.qq[1:50,], start = list(mu=res_qq_it$mu, sigma=res_qq_it$sigma, m=res_qq_it$m))
+summary(nls.fit2)
+
+# 초기값 = OLS 추정치
+nls.fit3 <- nls(St ~ q*log(m)*Yt_lag - q*Yt_mul, data=covid_it[1:50,], start = list(m=res_ols_it$m[9], q=res_ols_it$q[9]))
+summary(nls.fit3)
+
+nls.fit4 <- nls(Xr ~ mu+sigma*(-log(-log(r/(m+1)))), data=df.qq[1:50,], start = list(mu=which.max(pred$gum), sigma=1/res_ols_it[9,4], m=res_ols_it[9,5]))
+summary(nls.fit4)
+
+
+## 두 경우 결과값 동일
+res_nls1 <- rbind(summary(nls.fit)$coef[,1], summary(nls.fit3)$coef[,1])
+res_nls2 <- rbind(summary(nls.fit2)$coef[,1], summary(nls.fit4)$coef[,1])
+round(res_nls1,3)
+round(res_nls2,3)
+```
+
+##### MLE
+```{r}
+loglik <-function(par){
+  m<-par[1]; mu<-par[2]; sigma<-par[3]
+  data <- covid_it[1:50,c("St","t")]
+  
+  data["Ft"] <- exp(-exp(-(data$t-mu)/sigma))
+  
+  data[2:50,"prob"] <- diff(data$Ft)
+  data[1,"prob"] <- data[1,"Ft"]- exp(-exp(-(0-mu)/sigma))
+  
+  data[51,"prob"] <- 1 - data[50,"Ft"]
+  data[51,"St"] <- m - sum(data$St[1:50])
+  
+  data <- data %>% mutate(v1 = lfactorial(St) , v2 = St*log(prob))
+  # return(data)
+  
+  loglik <- lfactorial(m) - sum(data$v1) + sum(data$v2)
+  return(-loglik)
+}
+
+# initial value =  Q-Q plot estimator
+mle <- optim(par=c(res_qq_it[c(4,1,2)]), loglik, hessian=T, method= "BFGS")
+res_mle <- mle$par
+round(res_mle,3)
+```

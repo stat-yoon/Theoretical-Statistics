@@ -1,0 +1,596 @@
+---
+title: "movie"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(gt) #표출력 
+library(highcharter) #차트출력 
+library(lubridate)
+library(readxl)
+options("scipen" = 100)
+library(ggpubr)
+library(gridExtra)
+library(plotly)
+library(optimx)
+``` 
+
+
+
+# 1. 관객수 시계열 도표
+```{r}
+#파일 업로드 
+## 기생충
+df_movie1 <-read.csv("movie_parasite.csv", header = TRUE)
+df_movie1$날짜<- as.Date(df_movie1$날짜,'%Y-%m-%d') 
+df_movie1$관객수<- as.numeric(df_movie1$관객수)
+df_movie1$누적관객수<- as.numeric(df_movie1$누적관객수)
+
+## 모가디슈
+df_movie2 <-read.csv("mogadishu.csv", header = TRUE)
+df_movie2$날짜<- as.Date(df_movie2$날짜,'%Y-%m-%d') 
+
+
+##############
+
+#휴일효과 보정
+
+df_movie1$요일 <- wday(df_movie1$날짜, label = TRUE)
+df_movie2$요일 <- wday(df_movie2$날짜, label = TRUE)
+
+holiday <-read.csv("holiday1.csv")
+holiday$날짜<- as.Date(holiday$locdate,'%Y-%m-%d') 
+holiday %>% select("날짜","isHoliday",dateName
+) -> holiday
+
+
+df_movie1 <- df_movie1 %>% left_join(holiday,by="날짜") 
+df_movie2 <- df_movie2 %>% left_join(holiday,by="날짜") 
+df_movie1[is.na(df_movie1)] <- 0
+df_movie2[is.na(df_movie2)] <- 0
+df_movie1$isHoliday[df_movie1$isHoliday =="N"] <-0
+df_movie2$isHoliday[df_movie2$isHoliday =="N"] <-0
+df_movie1$isHoliday[df_movie1$isHoliday =="Y"] <-1
+df_movie2$isHoliday[df_movie2$isHoliday =="Y"] <-1
+df_movie1$isHoliday[df_movie1$요일 %in% c("토","일")] <-1
+df_movie2$isHoliday[df_movie2$요일 %in% c("토","일")] <-1
+df_movie1$isHoliday[df_movie1$날짜 == "2021-08-16"] <- 1 #대체공휴일
+df_movie2$isHoliday[df_movie2$날짜 == "2021-08-16"] <- 1 #대체공휴일 
+
+df_movie1 %>% mutate(관객수2 = ifelse(isHoliday==1,관객수*(1/2),관객수),
+                        날짜 = as.character(날짜)) -> df1
+df_movie2 %>% mutate(관객수2 = ifelse(isHoliday==1,관객수*(1/2),관객수),
+                        날짜 = as.character(날짜)) -> df2
+
+df1_2 <- df1 %>% filter(isHoliday==1)%>%mutate(날짜 =paste0(날짜,"A"))
+df2_2 <- df2 %>% filter(isHoliday==1)%>%mutate(날짜 =paste0(날짜,"A"))
+
+rbind(df1,df1_2) -> df_movie1
+rbind(df2,df2_2) -> df_movie2
+
+df_movie1 %>%arrange(날짜) -> df_movie1
+df_movie2 %>%arrange(날짜) ->df_movie2
+
+
+#주말 및 공휴일을 관객수의 1/2로 보정함 
+
+df_movie1 %>% 
+  arrange(날짜) %>% mutate(t = order(날짜))%>%
+  plot_ly() %>% 
+  add_trace(x = ~t, y = ~관객수,  mode = "lines",name ="보정전 관객수") %>% 
+  add_trace(x = ~t, y = ~관객수2,  mode = "lines",name = "보정후 관객수") %>%
+  layout(
+    title = "기생충 - 일일관객수"
+  )
+  
+
+df_movie2 %>% 
+  arrange(날짜) %>% mutate(t = order(날짜))%>%
+  plot_ly() %>% 
+  add_trace(x = ~t, y = ~관객수,  mode = "lines",name ="보정전 관객수") %>% 
+  add_trace(x = ~t, y = ~관객수2,  mode = "lines",name = "보정후 관객수") %>%
+  layout(
+    title = "모가디슈 - 일일관객수"
+  )
+
+
+
+df_movie1$누적관객수2 <- cumsum(df_movie1$관객수2)
+df_movie2$누적관객수2 <- cumsum(df_movie2$관객수2)
+head(df_movie2)
+
+
+df_movie1 %>%  
+  arrange(날짜)%>%
+  hchart("line", hcaes("날짜","누적관객수2"))%>%
+  hc_title(text = "기생충 - 누적관객수 ")
+
+df_movie2 %>%  
+  arrange(날짜)%>%
+  hchart("line", hcaes("날짜","누적관객수2"))%>%
+  hc_title(text = "모가디슈 - 누적관객수 ")
+
+
+#기생충/모가디슈 실제 관객수 m 
+parasite.m <- max(df_movie1$누적관객수2)
+mogadishu.m <- max(df_movie2$누적관객수2)
+parasite.m
+mogadishu.m
+
+```
+
+
+
+# 2. 총관객수 추정
+
+## 기생충 데이터 
+
+```{r}
+
+
+######## 1주 #########
+
+df_movie1 %>% arrange(날짜) %>% mutate( Y = lag(누적관객수2, 1)) -> df_movie1
+df_movie1[4:(4+6),] %>% mutate(t = rep(1:7)) -> df
+
+
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+
+m
+p
+q
+
+
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+q
+m
+
+
+
+#############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+q
+m<-exp(a/q)
+m
+
+
+
+#############################################
+
+## Exponential 
+#df$log관객수2 <- log(df$관객수2)
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+p <- -b
+p
+mu <- df$t[which.max(df$관객수2)]
+m <- a/p
+m
+
+
+
+######## 2주 #########
+
+df_movie1[4:(4+13),] %>%arrange(날짜) %>% mutate(t = rep(1:14)) -> df
+
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+m
+p
+q
+
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+m
+q
+
+
+#############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+m<-exp(a/q)
+m
+q
+
+
+#############################################
+
+## Exponential 
+#df$log관객수2 <- log(df$관객수2)
+
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+p <- -b
+mu <- df$t[which.max(df$관객수2)]
+m <- a/p
+m
+p
+
+
+######## 4주 #########
+
+df_movie1[4:(4+27),] %>% arrange(날짜) %>%mutate(t = rep(1:28)) -> df
+
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+m
+p
+q
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+m
+q
+
+#############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+m<-exp(a/q)
+m
+q
+
+
+
+#############################################
+
+## Exponential 
+#df$log관객수2 <- log(df$관객수2)
+
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+p <- -b
+mu <- df$t[which.max(df$관객수2)]
+m <- a/p
+m
+p
+
+```
+
+
+
+
+
+
+## 모가디슈 데이터 
+
+```{r}
+
+######## 1주 #########
+
+
+df_movie2 %>%  arrange(날짜) %>% mutate( Y = lag(누적관객수2, 1,default=0)) -> df_movie2
+df_movie2[6:(6+6),] %>% mutate(t = rep(1:7)) -> df
+#df_movie2[1:7,] %>% mutate(t = rep(1:7)) -> df
+
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+m
+p
+q
+
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+m
+q
+##############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+m<-exp(a/q)
+m
+q
+
+#############################################
+
+## Exponential 
+
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+
+p <- -b
+m <- a/p
+m
+p
+
+######## 2주 #########
+
+
+df_movie2 %>% arrange(날짜) %>% mutate( Y = lag(누적관객수2, 1)) -> df_movie2
+df_movie2[6:(6+13),] %>% mutate(t = rep(1:14)) -> df
+
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+m
+p
+q
+
+
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+m
+q
+#############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+m<-exp(a/q)
+m
+q
+
+
+#############################################
+
+## Exponential 
+#df$log관객수2 <- log(df$관객수2)
+
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+p <- -b
+mu <- df$t[which.max(df$관객수2)]
+m <- a/p
+m
+p
+
+######## 4주 #########
+
+df_movie2[6:(6+27),] %>% arrange(날짜) %>%mutate(t = rep(1:28)) -> df
+
+## bass 
+## bass 
+# ols 
+lm(관객수2 ~ Y+I(Y^2),data=df)
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[2] -> b
+lm(관객수2 ~ Y+I(Y^2),data=df)$coef[3] -> c
+
+
+m<- (-b-sqrt(b^2-4*a*c))/(2*c)
+p<- a/m
+q<- b+p
+m
+p
+q
+
+
+
+#############################################
+
+## logistic 
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[1] -> a
+lm(관객수2 ~ Y+I(Y^2)-1,data=df)$coef[2] -> b
+
+q<-a
+m<--q/b
+m
+q
+
+
+
+#############################################
+
+## gumbel 
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[1] ->a
+lm(관객수2 ~ Y+I(Y*log(Y))-1,data=df)$coef[2] ->b
+
+
+q<--b
+m<-exp(a/q)
+m
+q
+
+#############################################
+
+## Exponential 
+#df$log관객수2 <- log(df$관객수2)
+
+lm(관객수2 ~ Y ,data=df)
+lm(관객수2 ~ Y ,data=df)$coef[1] ->a
+lm(관객수2 ~ Y ,data=df)$coef[2] ->b
+
+p <- -b
+mu <- df$t[which.max(df$관객수2)]
+m <- a/p
+m
+p
+
+
+```
+
+
+# 3.Q-Q plot 
+
+### 기생충 
+```{r}
+
+df_movie1 %>% arrange(날짜)%>% 
+  mutate(t = order(날짜),
+         p=누적관객수2/(parasite.m+1),
+         bass = log((1+p)/(1-p)))  %>%ggplot(aes(bass,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p1
+
+
+
+df_movie1 %>% arrange(날짜)%>% 
+  mutate(t = order(날짜),
+         p=누적관객수2/(parasite.m+1),
+         gumbel = -log(-log(p)) )  %>%ggplot(aes(gumbel,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p2
+
+
+
+df_movie1 %>% arrange(날짜)%>% 
+  mutate(t = order(날짜),
+         p=누적관객수2/(parasite.m+1),
+         exp = qexp(p))  %>%ggplot(aes(exp,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p3
+
+
+df_movie1 %>% arrange(날짜)%>% 
+  mutate(t = order(날짜),
+         p=누적관객수2/(parasite.m+1),
+         logis = qlogis(p)) %>%ggplot(aes(logis,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p4
+
+grid.arrange(p1,p2,p3,p4, ncol=4)
+
+
+
+```
+
+### 모가디슈 
+
+```{r}
+
+df_movie2[1:41,] %>% arrange(날짜)%>% 
+  mutate(t = order(날짜) ,
+         p=누적관객수2/(mogadishu.m+1),
+         bass = log((1+p)/(1-p)))  %>%ggplot(aes(bass,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p1
+
+
+  
+df_movie2[1:41,]  %>% arrange(누적관객수)%>% 
+  mutate(t = order(날짜) ,
+         p=누적관객수2/(mogadishu.m+1),
+         gumbel = -log(-log(p)) ) %>%ggplot(aes(gumbel,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p2
+
+
+df_movie2[1:41,]  %>% arrange(누적관객수)%>% 
+  mutate(t = order(날짜) ,
+         p=누적관객수2/(mogadishu.m+1),
+         exp = qexp(p))  %>%ggplot(aes(exp,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p3
+
+
+df_movie2[1:41,]  %>% arrange(누적관객수)%>% 
+  mutate(t = order(날짜) ,
+         p=누적관객수2/(mogadishu.m+1),
+         logis = qlogis(p))  %>%ggplot(aes(logis,t)) +
+  geom_point(size=2) + geom_smooth(method="lm", se=F)+stat_regline_equation(aes(label = ..rr.label..))->p4
+
+grid.arrange(p1,p2,p3,p4, ncol=4)
+```

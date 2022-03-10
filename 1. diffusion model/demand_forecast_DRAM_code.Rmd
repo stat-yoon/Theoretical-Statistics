@@ -1,0 +1,302 @@
+---
+title: "DRAM data"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(gridExtra)
+```
+
+# (a) 시계열도표 
+```{r}
+data<-read.csv("DRAM-AIDS-자료.csv",header=T)
+names(data)<-c("year","Quantity","t","x256","x1md")
+attach(data)
+plot(data$x256,type='l' )
+
+y<-cumsum(data$x256)
+data$y<-y
+data$y2<-(data$y)^2
+
+y0=c()
+y0[1]=0
+for(t in 2:51) {
+         y0[t] = cumsum(data$x256)[t-1]
+     }
+data$y0<-y0
+data$y02<-y0^2
+```
+
+
+
+
+
+# (b) 총수요 추정: OLS METHOD
+```{r}
+train1<-data[1:15,]
+test1<-data[16:51,]
+
+train2<-data[1:30,]
+test2<-data[31:51,]
+
+train3<-data[1:51,]
+
+
+
+#bass
+##n=15
+lm.bass1<-lm(x256~y0+y02,train1)
+summary(lm.bass1)
+
+a<-summary(lm.bass1)$coef[1]
+b<-summary(lm.bass1)$coef[2]
+c<-summary(lm.bass1)$coef[3]
+
+bm.hat1<-(-b-sqrt(b^2-4*a*c))/(2*c)
+bp.hat1<-a/bm.hat1
+bq.hat1<-b+bp.hat1
+
+
+##n=30
+
+lm.bass2<-lm(x256~y0+I(y0^2),train2)
+summary(lm.bass2)
+
+a<-summary(lm.bass2)$coef[1]
+b<-summary(lm.bass2)$coef[2]
+c<-summary(lm.bass2)$coef[3]
+
+bm.hat2<-(-b-sqrt(b^2-4*a*c))/(2*c)
+bp.hat2<-a/bm.hat2
+bq.hat2<-b+bp.hat2
+
+##n=51
+lm.bass3<-lm(x256~y0+I(y0^2),train3)
+summary(lm.bass3)
+
+a<-summary(lm.bass3)$coef[1]
+b<-summary(lm.bass3)$coef[2]
+c<-summary(lm.bass3)$coef[3]
+
+bm.hat3<-(-b-sqrt(b^2-4*a*c))/(2*c)
+bp.hat3<-a/bm.hat3
+bq.hat3<-b+bp.hat3
+
+
+#logistic
+
+##n=15
+lm.logistic1<-lm(x256~y0+y02-1,train1)
+summary(lm.logistic1)
+
+a<-summary(lm.logistic1)$coef[1]
+b<-summary(lm.logistic1)$coef[2]
+c<-summary(lm.logistic1)$coef[3]
+lq.hat1<-a
+lm.hat1<- -lq.hat1/b
+
+
+##n=30
+lm.logistic2<-lm(x256~y0+y02-1,train2)
+summary(lm.logistic2)
+
+a<-summary(lm.logistic2)$coef[1]
+b<-summary(lm.logistic2)$coef[2]
+c<-summary(lm.logistic2)$coef[3]
+lq.hat2<-a
+lm.hat2<- -lq.hat2/b
+lq.hat2;lm.hat2
+
+
+
+##n=51
+lm.logistic3<-lm(x256~y0+y02-1,train3)
+summary(lm.logistic3)
+
+a<-summary(lm.logistic3)$coef[1]
+b<-summary(lm.logistic3)$coef[2]
+c<-summary(lm.logistic3)$coef[3]
+lq.hat3<-a
+lm.hat3<- -lq.hat2/b
+lq.hat3;lm.hat3
+
+
+#Gumbel
+train1g<-train1[2:15,]
+train1g$lny<-log(train1g$y0)
+
+train2g<-train2[2:30,]
+train2g$lny<-log(train2g$y0)
+
+train3g<-train3[2:51,]
+train3g$lny<-log(train3g$y0)
+
+##n=15
+lm.gumbel1<-lm(x256~y0+I(y0*lny)-1,data=train1g)
+summary(lm.gumbel1)
+
+a<-summary(lm.gumbel1)$coef[1]
+b<-summary(lm.gumbel1)$coef[2]
+
+gq.hat1<- -b
+gm.hat1<-exp(a/gq.hat1)
+gq.hat1;gm.hat1
+
+##n=30
+lm.gumbel2<-lm(x256~y0+I(y0*lny)-1,data=train2g)
+summary(lm.gumbel2)
+
+a<-summary(lm.gumbel2)$coef[1]
+b<-summary(lm.gumbel2)$coef[2]
+
+gq.hat2<- -b
+gm.hat2<-exp(a/gq.hat2)
+gq.hat2;gm.hat2
+
+
+##n=51
+lm.gumbel3<-lm(x256~y0+I(y0*lny)-1,data=train3g)
+summary(lm.gumbel3)
+a<-summary(lm.gumbel3)$coef[1]
+b<-summary(lm.gumbel3)$coef[2]
+
+gq.hat3<- -b
+gm.hat3<-exp(a/gq.hat3)
+gq.hat3;gm.hat3
+```
+
+
+
+
+
+# (c) 최적 예측 모형 선택: Q-Q plot, MSE
+```{r}
+#n=15
+
+##bass
+new.data.set1 <- train1%>% mutate(pr=train1$y/(bm.hat1+1), Bass=log((1+(bq.hat1/bp.hat1)*pr)/(1-pr))) 
+b.qq1<-ggplot(new.data.set1, aes(Bass, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##logistic
+new.data.set2 <- train1%>% mutate(pr=train1$y/(lm.hat1+1), Logistic=log(pr/(1-pr))) 
+l.qq1<-ggplot(new.data.set2, aes(Logistic, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##Gumbel
+new.data.set3 <- train1g%>% mutate( pr=train1g$y/(gm.hat1+1), Gumbel=-log(-log(pr))) 
+g.qq1<-ggplot(new.data.set3, aes(Gumbel, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+
+
+
+#n=30
+
+##bass
+new.data.set4 <- train2%>% mutate(pr=train2$y/(bm.hat2+1), Bass=log((1+(bq.hat2/bp.hat2)*pr)/(1-pr))) 
+b.qq2<-ggplot(new.data.set4, aes(Bass, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##logistic
+new.data.set5 <- train2%>% mutate(pr=train2$y/(lm.hat2+1),Logistic=log(pr/(1-pr))) 
+l.qq2<-ggplot(new.data.set5, aes(Logistic, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##Gumbel
+new.data.set6 <- train2g%>% mutate(pr=train2g$y/(gm.hat2+1), Gumbel=-log(-log(pr))) 
+g.qq2<-ggplot(new.data.set6, aes(Gumbel, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+
+#n=51
+
+##bass
+new.data.set7 <- train3%>% mutate( pr=train3$y/(bm.hat3+1), Bass=log((1+(bq.hat3/bp.hat3)*pr)/(1-pr))) 
+b.qq3<-ggplot(new.data.set7, aes(Bass, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##logistic
+new.data.set8 <- train3%>% mutate( pr=train3$y/(lm.hat3+1), Logistic=log(pr/(1-pr))) 
+l.qq3<-ggplot(new.data.set8, aes(Logistic, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##Gumbel
+new.data.set9 <- train3g%>% mutate(pr=train3g$y/(gm.hat3+1), Gumbel=-log(-log(pr))) 
+g.qq3<-ggplot(new.data.set9, aes(Gumbel, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+grid.arrange(b.qq1,l.qq1,g.qq1,b.qq2,l.qq2,g.qq2,b.qq3, l.qq3,g.qq3, ncol=3)
+
+##MSE
+
+mean(lm.bass1$residuals^2);mean(lm.bass2$residuals^2);mean(lm.bass3$residuals^2)
+mean(lm.logistic1$residuals^2);mean(lm.logistic2$residuals^2);mean(lm.logistic3$residuals^2)
+mean(lm.gumbel1$residuals^2);mean(lm.gumbel2$residuals^2);mean(lm.gumbel3$residuals^2)
+```
+
+
+
+
+
+# (d) 1M-DRAM censored data 총수요 추정
+```{r}
+ym<-cumsum(data$x1md)
+data$ym<-ym
+data$ym2<-(data$ym)^2
+
+ym0=c()
+ym0[1]=0
+for(t in 2:51) {
+         ym0[t] = cumsum(data$x1md)[t-1]
+     }
+data$ym0<-ym0
+data$ym02<-ym0^2
+
+#bass
+
+lm.bass<-lm(x1md~ym0+ym02,data)
+summary(lm.bass)
+
+a<-summary(lm.bass)$coef[1]
+b<-summary(lm.bass)$coef[2]
+c<-summary(lm.bass)$coef[3]
+
+bm.hat<-(-b-sqrt(b^2-4*a*c))/(2*c)
+bp.hat<-a/bm.hat
+bq.hat<-b+bp.hat
+
+
+#logistic
+
+lm.logistic<-lm(x1md~ym0+ym02-1,data)
+summary(lm.logistic)
+
+a<-summary(lm.logistic)$coef[1]
+b<-summary(lm.logistic)$coef[2]
+c<-summary(lm.logistic)$coef[3]
+lq.hat<-a
+lm.hat<- -bq.hat/b
+
+
+#gumbel
+datag<-data[13:51,]
+datag$lnym<-log(datag$ym0)
+lm.gumbel<-lm(x1md~ym0+I(ym0*lnym)-1,data=datag)
+a<-summary(lm.gumbel)$coef[1]
+b<-summary(lm.gumbel)$coef[2]
+
+gq.hat<- -b
+gm.hat<-exp(a/bq.hat)
+
+
+
+#qqplot
+##bass
+new.data.set <- data%>% mutate(pr=data$ym/(bm.hat+1), Bass=log((1+(bq.hat/bp.hat)*pr)/(1-pr))) 
+b.qq<-ggplot(new.data.set, aes(Bass, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##logistic
+new.data.set <- data%>% mutate(pr=data$ym/(lm.hat+1), Logistic=log(pr/(1-pr))) 
+l.qq<-ggplot(new.data.set, aes(Logistic, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+##Gumbel
+new.data.set <- datag%>% mutate( pr=datag$ym/(gm.hat+1), Gumbel=-log(-log(pr))) 
+g.qq<-ggplot(new.data.set, aes(Gumbel, t)) + geom_point(size=2) + geom_smooth(method="lm", se=F)
+
+grid.arrange(b.qq,l.qq,g.qq, ncol=3)
+
+```
+

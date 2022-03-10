@@ -1,0 +1,316 @@
+---
+title: "Project #6"
+author: "1조"
+date: '2021 11 03 '
+output: 
+
+  html_document: 
+
+    toc: true
+
+    toc_depth: 2
+    
+    toc_float: true
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(kableExtra)
+library(reshape)
+library(ggpubr)
+library(gridExtra)
+library(MASS)
+options("scipen" = 100)
+```
+
+# Part1
+## (a)
+```{r message=FALSE, warning=FALSE}
+
+car <- read_xls("1977-스웨덴자동차 보험_1956-캐나다자동차보험자료.xls")
+car["Kilometres"] <- as.factor(car$Kilometres)
+car["Zone"] <- as.factor(car$Zone)
+car["Bonus"] <- as.factor(car$Bonus)
+car["Make"] <- as.factor(car$Make)
+car1 <-car %>% filter(Insured>0)
+m <- sum(car1$Insured)
+
+# interaction X
+pois.fit1 <- glm(Claims ~ offset(log(Insured)) + Kilometres+Zone+Bonus+Make, data=car1, family = poisson(link = "log"))
+
+pois.step1.aic <- step(pois.fit1, trace = FALSE)
+pois.step1.bic <- step(pois.fit1, trace = FALSE, scale = log(m))
+
+# interaction O(1차)
+pois.fit2 <- glm(Claims ~ offset(log(Insured))+Kilometres+Zone+Bonus+Make+Kilometres:Zone+Kilometres:Bonus+Kilometres:Make+Zone:Bonus+Zone:Make+Bonus:Make, data=car1, family = poisson(link = "log"))
+
+pois.step2.aic <- step(pois.fit2, trace = FALSE)
+pois.step2.bic <- step(pois.fit2, trace = FALSE, scale = log(m))
+
+
+c(extractAIC(pois.fit1), extractAIC(pois.step1.aic), extractAIC(pois.fit2), extractAIC(pois.step2.aic))
+
+c(extractAIC(pois.fit1, k=log(m)), extractAIC(pois.step1.bic, k=log(m)), extractAIC(pois.fit2, k=log(m)), extractAIC(pois.step2.bic, k=log(m)))
+
+glm_poiss <- glm(Claims/Insured ~ Kilometres+Zone+Bonus+Make,data=car1, weight=Insured, family = poisson(link = "log"))
+glm_poiss2 <- glm(Claims/Insured ~ Kilometres+Zone+Bonus+Make+Kilometres+Zone+Bonus+Make+Kilometres:Zone+Kilometres:Bonus+Kilometres:Make+Zone:Bonus+Zone:Make+Bonus:Make, weight=Insured, data=car1, family = poisson(link = "log"))
+
+extractAIC(glm_poiss)
+extractAIC(glm_poiss2)
+extractAIC(glm_poiss,k=log(m))
+extractAIC(glm_poiss2,k=log(m))
+
+# bonus -> numeric
+car1.num <- car1
+car1.num["Bonus"] <- as.numeric(car1.num$Bonus)
+
+# interaction X
+pois.fit11 <- glm(Claims ~ offset(log(Insured))+Kilometres+Zone+Bonus+Make, data=car1.num, family = poisson(link = "log"))
+summary(pois.fit11)
+
+pois.step11.aic <- step(pois.fit11, trace = FALSE)
+summary(pois.step11.aic)
+
+pois.step11.bic <- step(pois.fit11, trace = FALSE, scale = log(m))
+summary(pois.step11.bic)
+
+# interaction O(1차)
+pois.fit22 <- glm(Claims ~ offset(log(Insured))+Kilometres+Zone+Bonus+Make+Kilometres:Zone+Kilometres:Bonus+Kilometres:Make+Zone:Bonus+Zone:Make+Bonus:Make, data=car1.num, family = poisson(link = "log"))
+summary(pois.fit22)
+
+pois.step22.aic <- step(pois.fit22, trace = FALSE)
+summary(pois.step22.aic)
+
+pois.step22.bic <- step(pois.fit22, trace = FALSE, scale = log(m))
+summary(pois.step22.bic)
+
+c(extractAIC(pois.fit11), extractAIC(pois.step11.aic), extractAIC(pois.fit22), extractAIC(pois.step22.aic))
+c(extractAIC(pois.fit11, k=log(m)), extractAIC(pois.step11.bic, k=log(m)), extractAIC(pois.fit22, k=log(m)), extractAIC(pois.step22.bic, k=log(m)))
+```
+
+## (b)
+```{r message=FALSE, warning=FALSE}
+car1.drop <- car1 %>% filter(Claims<=Insured)
+# interaction X
+logit.fit1 <- glm(cbind(Claims, Insured-Claims) ~ Kilometres+Zone+Bonus+Make, data=car1.drop, family = binomial(link="logit"))
+
+logit.step1.aic <- step(logit.fit1, trace = FALSE)
+logit.step1.bic <- step(logit.fit1, trace = FALSE, scale = log(m))
+
+# interaction O(1차)
+logit.fit2 <- glm(cbind(Claims, Insured-Claims) ~ Kilometres+Zone+Bonus+Make+Kilometres:Zone+Kilometres:Bonus+Kilometres:Make+Zone:Bonus+Zone:Make+Bonus:Make, data=car1.drop, family = binomial(link="logit"))
+
+logit.step2.aic <- step(logit.fit2, trace = FALSE)
+logit.step2.bic <- step(logit.fit2, trace = FALSE, scale = log(m))
+
+# AIC 기준
+c(extractAIC(logit.fit1), extractAIC(logit.step1.aic), extractAIC(logit.fit2), extractAIC(logit.step2.aic))
+summary(logit.fit2)
+
+# BIC 기준
+c(extractAIC(logit.fit1, k=log(m)), extractAIC(logit.step1.bic, k=log(m)), extractAIC(logit.fit2, k=log(m)), extractAIC(logit.step2.bic, k=log(m)))
+summary(logit.fit1)
+
+# bonus -> numeric
+# interaction X
+logit.fit11 <- glm(cbind(Claims, Insured-Claims) ~ Kilometres+Zone+as.numeric(Bonus)+Make, data=car1.drop, family = binomial(link="logit"))
+
+logit.step11.aic <- step(logit.fit11, trace = FALSE)
+logit.step11.bic <- step(logit.fit11, trace = FALSE, scale = log(m))
+
+# interaction O(1차)
+logit.fit22 <- glm(cbind(Claims, Insured-Claims) ~ Kilometres+Zone+as.numeric(Bonus)+Make+Kilometres:Zone+Kilometres:as.numeric(Bonus)+Kilometres:Make+Zone:as.numeric(Bonus)+Zone:Make+as.numeric(Bonus):Make, data=car1.drop, family = binomial(link="logit"))
+
+logit.step22.aic <- step(logit.fit22, trace = FALSE)
+logit.step22.bic <- step(logit.fit22, trace = FALSE, scale = log(m))
+
+# AIC 기준
+c(extractAIC(logit.fit11), extractAIC(logit.step11.aic), extractAIC(logit.fit22), extractAIC(logit.step22.aic))
+
+# BIC 기준
+c(extractAIC(logit.fit11, k=log(m)), extractAIC(logit.step11.bic, k=log(m)), extractAIC(logit.fit22, k=log(m)), extractAIC(logit.step22.bic, k=log(m)))
+```
+
+## (c)
+```{r message=FALSE, warning=FALSE}
+lambda.bar <- car1$Claims/car1$Insured
+lambda.hat <- glm_poiss$fitted.values
+
+person.poi <- (lambda.bar - lambda.hat)/sqrt(lambda.hat/car1$Insured)
+person.bin <- residuals(logit.fit1, type="pearson")
+
+dev.poi <- residuals(glm_poiss, type="deviance")
+dev.bin <- residuals(logit.fit1, type="deviance")
+
+res.poi <- data.frame(person = person.poi, deviance = dev.poi)
+res.bin <- data.frame(person = person.bin, deviance = dev.bin)
+
+g1 <- ggplot(stack(res.poi)) + geom_boxplot(aes(x=ind, y=values, fill=ind)) + labs(fill="residuals", x="") + ggtitle("Boxplot - Residuals of Poisson model") + facet_wrap(~ind, scale="free")
+g2 <- ggplot(stack(res.poi)) + geom_histogram(aes(x=values, col=ind, fill=ind), bins=40, alpha=0.7) + labs(fill="residuals",col="residuals", x="") + ggtitle("Histogram - Residuals of Poisson model") + facet_wrap(~ind, scale="free")
+g3 <- ggplot(stack(res.poi), aes(sample=values, group=ind, col=ind)) + geom_qq() + geom_qq_line(col="black", lty=2) +  labs(fill="residuals", x="") + ggtitle("Q-Q plot - Residuals of Poisson model") + facet_wrap(~ind, scale="free")
+grid.arrange(g1,g2,g3, nrow=3)
+
+p1 <- ggplot(stack(res.bin)) + geom_boxplot(aes(y=values, fill=ind)) + labs(fill="residuals", x="") + ggtitle("Boxplot - Residuals of Binomial model") + facet_wrap(~ind, scale="free")
+p2 <- ggplot(stack(res.bin)) + geom_histogram(aes(x=values, col=ind, fill=ind), bins=40, alpha=0.7) + labs(fill="residuals",col="residuals", x="") + ggtitle("Histogram - Residuals of Binomial model") + facet_wrap(~ind, scale="free")
+p3 <- ggplot(stack(res.bin), aes(sample=values, group=ind, col=ind)) + geom_qq() + geom_qq_line(col="black", lty=2) +  labs(fill="residuals", x="") + ggtitle("Q-Q plot - Residuals of Binomial model") + facet_wrap(~ind, scale="free")
+grid.arrange(p1,p2,p3, nrow=3)
+```
+
+## (d)
+해당 데이터에는 포아송 모형이 더 적절
+
+## (e)
+```{r message=FALSE, warning=FALSE}
+zero <- car %>% filter(Insured==0)
+zero.pred <- predict(glm_poiss, zero, type="response")
+zero.res <- round(zero.pred, 4)
+zero.res
+small <- car %>% filter(Insured<20)
+table(small$Claims)
+small.pred <- predict(glm_poiss, small, type="response")
+small.res <- cbind(small$Insured,small$Claims,round(small$Claims/small$Insured,3), round(small.pred, 3))
+head(small.res)
+```
+m이 0인 경우 단순 추정값은 정의되지 않으나 GLM모형을 이용하면 추정가능하다. m이 매우 작은 경우 n이 0인 경우들이 많이 존재한다. 이런 경우 단순 추정값은 0이 되나 GLM모형을 이용하면 0이 아닌 람다가 추정된다.
+
+## (f)
+```{r message=FALSE, warning=FALSE}
+set.seed(123)
+nb.fit <- glm.nb(Claims/Insured ~ Kilometres+Zone+Bonus+Make, weights=Insured, data=car1[,1:6])
+summary(nb.fit)
+
+fitted <- data.frame(poisson = glm_poiss$fitted.values, nb = nb.fit$fitted.values)
+ggplot(fitted, aes(x=poisson, y=nb)) + geom_point() + geom_abline(aes(intercept=0, slope=1), col="blue", lty=2) + ggtitle("predict values: poisson vs negative binomial")
+```
+음이항 모형과 포아송 모형을 이용하였을 때 예측값이 매우 비슷함을 확인 할 수 있다. 또한 음이항 모형에서 dispersion parameter(theta) = 740000으로 크게 추정되어 포아송 모형이 적절함을 한번 더 확인할 수 있다.
+
+# Part2
+## (a)
+```{r message=FALSE, warning=FALSE}
+car2 <- car %>% filter(Claims != 0)
+
+m <- sum(car2$Insured)
+
+glm_gamma <- glm(Payment/Claims ~ Kilometres + Zone + Bonus + Make, data=car2, family=Gamma(link='log'), weights = Claims)
+
+glm_gamma_aic <- step(glm_gamma, trace = FALSE)
+#print('-------------------------------------------BIC-----------------------------------------------')
+
+glm_gamma_bic <- step(glm_gamma, trace = FALSE, scale=log(m))
+
+print(extractAIC(glm_gamma_aic))
+print(extractAIC(glm_gamma_bic, k=log(m)))
+
+glm_gamma2 <- glm(Payment/Claims ~ Kilometres + Zone + as.numeric(Bonus) + Make, data=car2, family=Gamma(link='log'), weights = Claims)
+
+#bonus->numeric
+glm_gamma2_aic <- step(glm_gamma2, trace = FALSE)
+#print('-------------------------------------------BIC-----------------------------------------------')
+glm_gamma2_bic <- step(glm_gamma2, trace = FALSE, scale=log(m))
+
+print(extractAIC(glm_gamma2_aic))
+print(extractAIC(glm_gamma2_bic, k=log(m)))
+
+#bonus->numeric, interaction o
+glm_gamma3 <- glm(Payment/Claims ~ Kilometres + Zone + as.numeric(Bonus) + Make + Kilometres*Zone + Kilometres*as.numeric(Bonus) + Kilometres*Make + Zone*as.numeric(Bonus) + Zone*Make + as.numeric(Bonus)*Make, data=car2, family=Gamma(link='log'), weights = Claims)
+
+glm_gamma3_aic <- step(glm_gamma3, trace = FALSE)
+glm_gamma3_bic <- step(glm_gamma3, trace = FALSE, scale=log(m))
+
+print(extractAIC(glm_gamma3_aic))
+print(extractAIC(glm_gamma3_bic, k=log(m)))
+
+#bonus->numeric, interaction o
+glm_gamma4 <- glm(Payment/Claims ~ Kilometres + Zone + Bonus + Make + Kilometres*Zone + Kilometres*Bonus + Kilometres*Make + Zone*Bonus + Zone*Make + Bonus*Make, data=car2, family=Gamma(link='log'), weights = Claims)
+
+glm_gamma4_aic <- step(glm_gamma4, trace = FALSE)
+glm_gamma4_bic <- step(glm_gamma4, trace = FALSE, scale=log(m))
+
+print(extractAIC(glm_gamma4_aic))
+print(extractAIC(glm_gamma4_bic, k=log(m)))
+summary(glm_gamma4)
+```
+
+## (b)
+```{r message=FALSE, warning=FALSE}
+y_hat <- glm_gamma$fitted.values
+y_bar <- car2$Payment/car2$Claims
+
+# residual
+r_pearson <- residuals(glm_gamma, type='pearson')
+r_deviance <- residuals(glm_gamma, type='deviance')
+
+residuals <- data.frame(r_pearson, r_deviance)
+# boxplot
+g1 <- ggplot(residuals) + geom_boxplot(aes(y=r_pearson)) + labs(title='Pearson')
+g2 <- ggplot(residuals) + geom_boxplot(aes(y=r_deviance)) + labs(title='Deviance')
+
+# histogram
+g3 <- ggplot(residuals) + geom_histogram(aes(x=r_pearson), bins = 30) + labs(title='Pearson')
+g4 <- ggplot(residuals) + geom_histogram(aes(x=r_deviance), bins = 30) + labs(title='Deviance')
+
+# normal Q-Q Plot
+g5 <- ggplot(residuals, aes(sample=r_pearson)) + stat_qq() + stat_qq_line() + labs(title='Pearson')
+g6 <- ggplot(residuals, aes(sample=r_deviance)) + stat_qq() + stat_qq_line() + labs(title='Deviance')
+
+grid.arrange(g1, g2, g3, g4, g5, g6, ncol=2)
+```
+
+## (c)
+```{r}
+small <- car %>% filter(Claims<20)
+small.pred <- predict(glm_gamma, small, type="response")
+small.res <- cbind(small$Claims,small$Payment,round(small$Payment/small$Claims,3), round(small.pred, 3))
+head(small.res)
+```
+
+평균사고심도에 대한 단순추정값과 GLM을 이용한 추정량의 차이는 사고건수(n)가 0이거나 매우 작을 값일 때 발생한다. 단순추정값 같은 경우, 평균 사고심도의 분모가 매우 작은 값이기 때문에 결과값이 약 0으로 도출된다. 그러나 GLM을 이용하여 계산한다면 정확한 평균 값을 구할 수 있다.
+
+-> bonus(factor) & 교호작용 없음 모형 선택
+
+# Part3
+## (a)
+```{r}
+summary(glm_poiss)
+summary(glm_gamma)
+```
+
+## (b)
+```{r message=FALSE, warning=FALSE}
+kil <- rep(1:5, rep(7*7*9, 5))
+zone <- rep(rep(1:7, rep(7*9, 7)),5)
+bonus <- rep(rep(1:7, rep(9, 7)), 5*7)
+make <- rep(1:9, 5*7*7)
+data <- data.frame(cbind(kil, zone, bonus, make))
+colnames(data) <- colnames(car)[1:4]
+data[,colnames(data)] <- lapply(data[,colnames(data)], factor)
+data <- data %>% left_join(car)
+data["lambda"] <- exp(predict(glm_poiss, data))
+data["mu"] <- exp(predict(glm_gamma, data))
+data["premium"] <- data$lambda*data$mu
+data["pre_month"] <- round(data$premium/12/100)*100
+data["loss"] <- data$Payment/(data$Insured*data$premium)
+
+na.omit(data) %>% filter(Claims>5) %>% ggplot() + geom_boxplot(aes(y=loss))
+
+ggplot(na.omit(data)) + geom_histogram(aes(loss), bins=50)
+
+summary(data$loss)
+```
+
+## (c)
+```{r}
+total.loss <- sum(data$Payment, na.rm = TRUE)/sum(data$Insured*data$premium, na.rm = TRUE)
+total.loss
+```
+
+## (d)
+```{r message=FALSE, warning=FALSE}
+data %>% mutate(simple.premium =Payment/Insured ) -> result
+
+result %>% filter(Insured<5) %>% gather(key="key",value= "value",simple.premium,premium) %>%
+  ggplot() + geom_density(aes(value,fill=key),alpha = 0.5)+xlim(0,2000)+
+  scale_fill_manual(values = c("orange", "skyblue"),labels=c("추정보험료","단순계산보험료"))
+```
